@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flaky-test-autopsy"
+version = "0.1.0"
+description = "Detect and diagnose flaky tests in pytest-based repositories"
+requires-python = ">=3.10"
+dependencies = [
+  "click>=8.0",
+  "rich>=13.0",
+  "pytest>=7.0",
+  "pytest-randomly>=3.0",
+]
+
+[project.scripts]
+autopsy = "autopsy.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["autopsy*"]
