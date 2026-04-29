@@ -1,6 +1,7 @@
 """SQLite interface for storing test run results."""
 
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 from autopsy.models import RunRecord
@@ -11,6 +12,7 @@ def open_db(path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     _create_schema(conn)
+    create_ai_fixes_table(conn)
     return conn
 
 
@@ -33,6 +35,49 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             stdout      TEXT
         );
     """)
+    conn.commit()
+
+
+def create_ai_fixes_table(conn: sqlite3.Connection) -> None:
+    """Create the AI fix response cache table if it doesn't exist."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS ai_fixes (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            test_id      TEXT NOT NULL,
+            root_cause   TEXT NOT NULL,
+            ai_response  TEXT NOT NULL,
+            model        TEXT NOT NULL,
+            created_at   TEXT NOT NULL,
+            UNIQUE(test_id, root_cause)
+        )
+    """)
+    conn.commit()
+
+
+def get_cached_ai_fix(conn: sqlite3.Connection, test_id: str, root_cause: str) -> "str | None":
+    """Return cached AI response for this test+cause, or None if not cached."""
+    row = conn.execute(
+        "SELECT ai_response FROM ai_fixes WHERE test_id = ? AND root_cause = ?",
+        (test_id, root_cause),
+    ).fetchone()
+    return row["ai_response"] if row else None
+
+
+def save_ai_fix(
+    conn: sqlite3.Connection,
+    test_id: str,
+    root_cause: str,
+    ai_response: str,
+    model: str,
+) -> None:
+    """Upsert AI fix response into cache."""
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO ai_fixes (test_id, root_cause, ai_response, model, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (test_id, root_cause, ai_response, model, datetime.now(timezone.utc).isoformat()),
+    )
     conn.commit()
 
 

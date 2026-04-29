@@ -7,11 +7,13 @@ import pytest
 from autopsy.db import (
     clear_results,
     get_all_test_ids,
+    get_cached_ai_fix,
     get_results_for_test,
     get_results_matrix,
     get_run_summary,
     insert_run,
     open_db,
+    save_ai_fix,
 )
 from autopsy.models import RunRecord, TestResult
 
@@ -114,3 +116,35 @@ def test_get_run_summary():
     assert s["total_tests_seen"] == 4  # 2 tests × 2 runs
     assert s["first_run_at"] != ""
     assert s["last_run_at"] != ""
+
+
+def test_ai_fixes_table_created(tmp_path):
+    """open_db should create the ai_fixes table automatically."""
+    conn = open_db(tmp_path / "test.db")
+    tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    assert "ai_fixes" in tables
+    conn.close()
+
+
+def test_cache_roundtrip(tmp_path):
+    """save_ai_fix stores and get_cached_ai_fix retrieves correctly; upserts update."""
+    conn = open_db(tmp_path / "test.db")
+
+    assert get_cached_ai_fix(conn, "t::foo", "network") is None
+
+    save_ai_fix(conn, "t::foo", "network", "Fix: use requests_mock.", "claude-opus-4-7")
+    assert get_cached_ai_fix(conn, "t::foo", "network") == "Fix: use requests_mock."
+
+    # Different cause — should be independent
+    assert get_cached_ai_fix(conn, "t::foo", "timing") is None
+
+    # Upsert same key — should overwrite
+    save_ai_fix(conn, "t::foo", "network", "Updated fix.", "claude-opus-4-7")
+    assert get_cached_ai_fix(conn, "t::foo", "network") == "Updated fix."
+
+    conn.close()

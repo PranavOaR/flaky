@@ -33,8 +33,19 @@ class FlakinessReport:
     pass_count: int
     fail_count: int
     pass_rate: float
-    flakiness_score: float                  # wilson lower bound on failure rate
+    flakiness_score: float                    # wilson lower bound on failure rate
     confidence_interval: tuple[float, float]  # (lower, upper) on failure rate
     is_flaky: bool
-    severity: str                           # 'none' | 'low' | 'medium' | 'high' | 'critical'
+    severity: str                             # 'none' | 'low' | 'medium' | 'high' | 'critical'
     root_cause: Optional[RootCause] = None
+
+
+@dataclass
+class FixSuggestion:
+    test_id: str
+    root_cause_category: str
+    template_fix: str             # always present
+    code_snippet: Optional[str]   # python code block to display, if applicable
+    ai_fix: Optional[str]         # only when --ai flag was used and API succeeded
+    source: str                   # 'template' | 'ai' | 'template+ai'
+    from_cache: bool              # True when ai_fix was retrieved from the DB cache

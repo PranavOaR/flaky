@@ -13,6 +13,7 @@ dependencies = [
   "pytest>=7.0",
   "pytest-randomly>=3.0",
   "pytest-json-report>=1.5",
+  "anthropic>=0.25",
 ]
 
 [project.scripts]
