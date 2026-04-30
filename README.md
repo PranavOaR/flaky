@@ -7,6 +7,8 @@
 [![Tests](https://img.shields.io/github/actions/workflow/status/PranavOaR/flaky/flaky-tests.yml)](https://github.com/PranavOaR/flaky/actions)
 [![License](https://img.shields.io/github/license/PranavOaR/flaky)](LICENSE)
 
+![Flaky Test Autopsy Demo](docs/demo.gif)
+
 ---
 
 ## The problem
