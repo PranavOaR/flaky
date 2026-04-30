@@ -2,10 +2,10 @@
 
 > Detect flaky tests. Classify why. Get a fix.
 
-[![PyPI version](https://img.shields.io/pypi/v/flaky-test-autopsy)](https://pypi.org/project/flaky-test-autopsy/)
-[![Python versions](https://img.shields.io/pypi/pyversions/flaky-test-autopsy)](https://pypi.org/project/flaky-test-autopsy/)
-[![Tests](https://img.shields.io/github/actions/workflow/status/PranavOaR/flaky/flaky-tests.yml)](https://github.com/PranavOaR/flaky/actions)
-[![License](https://img.shields.io/github/license/PranavOaR/flaky)](LICENSE)
+[![PyPI version](https://img.shields.io/pypi/v/flaky-test-autopsy)](https://pypi.org/project/flaky-test-autopsy)
+[![Python versions](https://img.shields.io/pypi/pyversions/flaky-test-autopsy)](https://pypi.org/project/flaky-test-autopsy)
+[![CI](https://img.shields.io/github/actions/workflow/status/PranavOaR/flaky/flaky-tests.yml?label=tests)](https://github.com/PranavOaR/flaky/actions)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/PranavOaR/flaky/blob/main/LICENSE)
 
 ![Flaky Test Autopsy Demo](docs/demo.gif)
 
