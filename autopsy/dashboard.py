@@ -21,170 +21,252 @@ _HTML = """\
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
   :root {
-    --bg: #0d1117;
-    --surface: #161b22;
-    --border: #30363d;
-    --text: #e6edf3;
-    --muted: #7d8590;
-    --red: #f85149;
-    --orange: #d29922;
-    --yellow: #e3b341;
-    --green: #3fb950;
-    --blue: #58a6ff;
+    --bg:       #0d1117;
+    --surface:  #161b22;
+    --border:   #30363d;
+    --text:     #e6edf3;
+    --muted:    #7d8590;
+    --critical: #f85149;
+    --high:     #e06c4a;
+    --medium:   #e3b341;
+    --low:      #58a6ff;
+    --clean:    #3fb950;
   }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     background: var(--bg);
     color: var(--text);
-    font-family: 'Segoe UI', system-ui, -apple-system, monospace;
+    font-family: system-ui, -apple-system, sans-serif;
     font-size: 14px;
     line-height: 1.5;
   }
+
+  /* ---- header ---- */
   header {
     background: var(--surface);
     border-bottom: 1px solid var(--border);
-    padding: 16px 24px;
+    height: 52px;
+    padding: 0 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
   }
-  header h1 {
-    font-family: monospace;
-    font-size: 20px;
-    color: var(--text);
-    letter-spacing: 0.5px;
-  }
-  header .subline {
-    color: var(--muted);
-    font-size: 12px;
-    margin-top: 4px;
-  }
-  .container { max-width: 1400px; margin: 0 auto; padding: 24px; }
+  .hdr-left  { display: flex; align-items: center; gap: 10px; }
+  .hdr-title { font-family: monospace; font-size: 15px; font-weight: 600; letter-spacing: 0.4px; }
+  .hdr-sep   { color: var(--border); }
+  .hdr-db    { font-family: monospace; font-size: 12px; color: var(--muted); }
+  .hdr-right { font-size: 12px; color: var(--muted); }
+
+  /* ---- layout ---- */
+  .container { max-width: 1440px; margin: 0 auto; padding: 20px 24px; }
+
+  /* ---- metric cards ---- */
   .cards {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
     gap: 12px;
-    margin-bottom: 24px;
+    margin-bottom: 20px;
   }
   .card {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 6px;
-    padding: 16px;
-    text-align: center;
+    padding: 16px 20px;
   }
-  .card .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
-  .card .value { font-size: 32px; font-weight: 700; margin-top: 6px; }
-  .card.flaky-red .value { color: var(--red); }
-  .card.flaky-green .value { color: var(--green); }
-  .section {
+  .card-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--muted);
+  }
+  .card-value {
+    font-size: 30px;
+    font-weight: 700;
+    margin-top: 6px;
+    font-variant-numeric: tabular-nums;
+  }
+  .card-value.red   { color: var(--critical); }
+  .card-value.green { color: var(--clean); }
+
+  /* ---- charts row ---- */
+  .charts-row {
+    display: grid;
+    grid-template-columns: 60fr 40fr;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .panel {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 6px;
-    margin-bottom: 24px;
     overflow: hidden;
   }
-  .section-header {
-    padding: 12px 16px;
+  .panel-header {
+    padding: 10px 16px;
     border-bottom: 1px solid var(--border);
+    font-size: 11px;
     font-weight: 600;
-    font-size: 13px;
-    color: var(--muted);
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.8px;
+    color: var(--muted);
   }
-  .chart-wrapper { padding: 16px; height: 280px; position: relative; }
-  #filter-bar {
-    padding: 12px 16px;
+  .chart-wrap { padding: 16px; height: 240px; position: relative; }
+
+  /* ---- table panel ---- */
+  .table-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .table-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
     border-bottom: 1px solid var(--border);
   }
-  #filter-bar input {
+  .table-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--muted);
+  }
+  #filter-input {
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 4px;
     color: var(--text);
-    font-size: 13px;
-    padding: 6px 10px;
-    width: 300px;
+    font-size: 12px;
+    font-family: system-ui, sans-serif;
+    padding: 5px 10px;
+    width: 240px;
     outline: none;
   }
-  #filter-bar input:focus { border-color: var(--blue); }
+  #filter-input::placeholder { color: var(--muted); }
+  #filter-input:focus { border-color: var(--low); }
+
   table { width: 100%; border-collapse: collapse; }
-  th {
+  thead th {
     background: var(--bg);
     border-bottom: 1px solid var(--border);
     color: var(--muted);
     cursor: pointer;
     font-size: 11px;
     font-weight: 600;
-    letter-spacing: 0.5px;
-    padding: 10px 16px;
+    letter-spacing: 0.6px;
+    padding: 9px 16px;
     text-align: left;
     text-transform: uppercase;
     user-select: none;
+    white-space: nowrap;
   }
-  th:hover { color: var(--text); }
-  th.sorted-asc::after { content: " ▲"; }
-  th.sorted-desc::after { content: " ▼"; }
-  td {
+  thead th:hover { color: var(--text); }
+  thead th.sorted-asc::after  { content: " \25B2"; font-size: 9px; }
+  thead th.sorted-desc::after { content: " \25BC"; font-size: 9px; }
+
+  tbody td {
     border-bottom: 1px solid var(--border);
     padding: 10px 16px;
+    vertical-align: middle;
     font-size: 13px;
-    font-family: monospace;
   }
-  tr:last-child td { border-bottom: none; }
-  tr:hover td { background: rgba(255,255,255,0.02); }
-  .sev-critical { color: var(--red); font-weight: 700; }
-  .sev-high     { color: var(--red); }
-  .sev-medium   { color: var(--yellow); }
-  .sev-low      { color: var(--blue); }
-  .sev-none     { color: var(--muted); }
-  .trend-regression  { color: var(--red); }
-  .trend-worsening   { color: var(--orange); }
-  .trend-improvement { color: var(--green); }
-  .trend-stable_flaky { color: var(--yellow); }
-  .trend-stable_clean { color: var(--muted); }
-  .trend-new         { color: var(--blue); }
-  .badge {
-    border-radius: 4px;
-    font-size: 11px;
-    font-weight: 600;
-    padding: 2px 6px;
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover td { background: rgba(255,255,255,0.03); }
+
+  .td-test {
+    font-family: monospace;
+    font-size: 12px;
+    max-width: 440px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .td-muted { font-size: 12px; color: var(--muted); text-transform: capitalize; }
+
+  /* ---- severity pill ---- */
+  .sev-pill {
+    display: inline-block;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    padding: 2px 7px;
     text-transform: uppercase;
   }
-  .badge-ordering   { background: rgba(210,153,34,0.2);  color: var(--orange); }
-  .badge-timing     { background: rgba(227,179,65,0.2);  color: var(--yellow); }
-  .badge-randomness { background: rgba(88,166,255,0.2);  color: var(--blue); }
-  .badge-network    { background: rgba(248,81,73,0.2);   color: var(--red); }
-  .badge-unknown    { background: rgba(125,133,144,0.15);color: var(--muted); }
-  .sparkline { display: inline-block; vertical-align: middle; }
-  .auto-refresh { float: right; color: var(--muted); font-size: 11px; font-weight: normal; text-transform: none; letter-spacing: 0; }
+  .sev-critical { background: rgba(248,81,73,0.15);   color: var(--critical); }
+  .sev-high     { background: rgba(224,108,74,0.15);  color: var(--high); }
+  .sev-medium   { background: rgba(227,179,65,0.15);  color: var(--medium); }
+  .sev-low      { background: rgba(88,166,255,0.15);  color: var(--low); }
+  .sev-none     { background: rgba(125,133,144,0.12); color: var(--muted); }
+
+  /* ---- flakiness cell ---- */
+  .flake-cell  { min-width: 90px; }
+  .flake-pct   { font-size: 13px; font-variant-numeric: tabular-nums; margin-bottom: 4px; }
+  .flake-track { height: 2px; background: var(--border); border-radius: 1px; overflow: hidden; }
+  .flake-fill  { height: 100%; border-radius: 1px; }
+
+  /* ---- trend ---- */
+  .trend-regression   { font-size: 12px; color: var(--critical); }
+  .trend-worsening    { font-size: 12px; color: var(--high); }
+  .trend-improvement  { font-size: 12px; color: var(--clean); }
+  .trend-stable_flaky { font-size: 12px; color: var(--medium); }
+  .trend-stable_clean { font-size: 12px; color: var(--muted); }
+  .trend-new          { font-size: 12px; color: var(--low); }
+  .trend-gone         { font-size: 12px; color: var(--muted); }
+
+  .empty-state { padding: 40px; text-align: center; color: var(--muted); font-size: 13px; }
 </style>
 </head>
 <body>
 <header>
-  <h1>&#128302; Flaky Test Autopsy</h1>
-  <div class="subline" id="subline">Loading...</div>
+  <div class="hdr-left">
+    <span class="hdr-title">FLAKY TEST AUTOPSY</span>
+    <span class="hdr-sep">|</span>
+    <span class="hdr-db" id="hdr-db">loading...</span>
+  </div>
+  <div class="hdr-right" id="hdr-refresh"></div>
 </header>
+
 <div class="container">
-  <div class="cards" id="cards">
-    <div class="card"><div class="label">Total Tests</div><div class="value" id="c-total">-</div></div>
-    <div class="card" id="c-flaky-card"><div class="label">Flaky</div><div class="value" id="c-flaky">-</div></div>
-    <div class="card"><div class="label">Clean</div><div class="value" id="c-clean">-</div></div>
-    <div class="card"><div class="label">Sessions</div><div class="value" id="c-sessions">-</div></div>
-  </div>
-
-  <div class="section">
-    <div class="section-header">
-      Flakiness Over Time
-      <span class="auto-refresh" id="refresh-note"></span>
+  <div class="cards">
+    <div class="card">
+      <div class="card-label">Total Tests</div>
+      <div class="card-value" id="c-total">--</div>
     </div>
-    <div class="chart-wrapper"><canvas id="trend-chart"></canvas></div>
+    <div class="card">
+      <div class="card-label">Flaky</div>
+      <div class="card-value" id="c-flaky">--</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Sessions</div>
+      <div class="card-value" id="c-sessions">--</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Health</div>
+      <div class="card-value" id="c-health">--%</div>
+    </div>
   </div>
 
-  <div class="section">
-    <div class="section-header">Tests</div>
-    <div id="filter-bar">
+  <div class="charts-row">
+    <div class="panel">
+      <div class="panel-header">Flakiness Over Sessions</div>
+      <div class="chart-wrap"><canvas id="trend-chart"></canvas></div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">Root Causes</div>
+      <div class="chart-wrap"><canvas id="cause-chart"></canvas></div>
+    </div>
+  </div>
+
+  <div class="table-panel">
+    <div class="table-header">
+      <span class="table-title">Tests</span>
       <input type="text" id="filter-input" placeholder="Filter by test name..." oninput="applyFilter()"/>
     </div>
-    <table id="test-table">
+    <table>
       <thead>
         <tr>
           <th onclick="sortTable(0)">Test</th>
@@ -193,7 +275,6 @@ _HTML = """\
           <th onclick="sortTable(3)">Pass Rate</th>
           <th onclick="sortTable(4)">Flakiness</th>
           <th onclick="sortTable(5)">Trend</th>
-          <th>Sparkline</th>
         </tr>
       </thead>
       <tbody id="test-tbody"></tbody>
@@ -202,223 +283,235 @@ _HTML = """\
 </div>
 
 <script>
-const SEV_ORDER = {critical:0,high:1,medium:2,low:3,none:4};
-const TREND_ICON = {
-  regression:'&#8600; Regress',
-  worsening:'&#8599; Worse',
-  improvement:'&#8595; Improv',
-  stable_flaky:'~ Flaky',
-  stable_clean:'&#10003; Stable',
-  new:'&#9733; New',
-  gone:'&#10007; Gone'
+const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3, none: 4 };
+const TREND_LABEL = {
+  regression:   'Regress',
+  worsening:    'Worsening',
+  improvement:  'Improving',
+  stable_flaky: 'Stable Flaky',
+  stable_clean: 'Stable Clean',
+  new:          'New',
+  gone:         'Gone',
 };
-const CAUSE_COLORS = {
-  ordering:'#d29922',timing:'#e3b341',randomness:'#58a6ff',
-  network:'#f85149',unknown:'#7d8590'
-};
+const PALETTE = [
+  '#f85149','#58a6ff','#3fb950','#e3b341','#bc8cff',
+  '#ff7b72','#79c0ff','#56d364','#d2a8ff','#ffa657',
+];
 
-let allTests = [];
-let sortCol = 4;
-let sortDir = -1; // -1=desc, 1=asc
-let chart = null;
+let allTests   = [];
+let sortCol    = 4;
+let sortDir    = -1;
+let trendChart = null;
+let causeChart = null;
+
+const DB_PATH = document.querySelector('meta[name="db-path"]')?.content || '';
 
 async function fetchData() {
-  const res = await fetch('/api/data');
-  return await res.json();
+  const r = await fetch('/api/data');
+  return r.json();
 }
 
-function sparklineSVG(data) {
-  if (!data || data.length === 0) return '';
-  const w = 6, h = 20, gap = 2;
-  const total = data.length;
-  const svgW = total * (w + gap) - gap;
-  let bars = '';
-  for (let i = 0; i < total; i++) {
-    const v = Math.min(1, Math.max(0, data[i]));
-    const bh = Math.max(2, Math.round(v * h));
-    const x = i * (w + gap);
-    const y = h - bh;
-    const color = v === 0 ? '#3fb950' : v < 0.3 ? '#e3b341' : '#f85149';
-    bars += `<rect x="${x}" y="${y}" width="${w}" height="${bh}" fill="${color}" rx="1"/>`;
-  }
-  return `<svg class="sparkline" width="${svgW}" height="${h}" viewBox="0 0 ${svgW} ${h}">${bars}</svg>`;
+function flakeColor(v) {
+  if (v <= 0.05) return '#3fb950';
+  if (v <= 0.20) return '#58a6ff';
+  if (v <= 0.40) return '#e3b341';
+  if (v <= 0.60) return '#e06c4a';
+  return '#f85149';
 }
 
 function renderTable(tests) {
-  const tbody = document.getElementById('test-tbody');
-  const filter = document.getElementById('filter-input').value.toLowerCase();
+  const filter  = document.getElementById('filter-input').value.toLowerCase();
   const visible = tests.filter(t => t.test_id.toLowerCase().includes(filter));
+  const tbody   = document.getElementById('test-tbody');
+
+  if (visible.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state">No tests match.</div></td></tr>';
+    return;
+  }
 
   tbody.innerHTML = visible.map(t => {
-    const shortId = t.test_id.length > 60
-      ? '&hellip;' + t.test_id.slice(-57)
-      : t.test_id;
-    const sev = t.severity || 'none';
-    const cause = t.root_cause || 'unknown';
-    const trend = t.trend || 'new';
-    const passRate = (t.pass_rate * 100).toFixed(1) + '%';
-    const flakePct = (t.flakiness_score * 100).toFixed(1) + '%';
-    const trendIcon = TREND_ICON[trend] || trend;
-    const spark = sparklineSVG(t.sparkline_data || []);
+    const sev        = t.severity || 'none';
+    const cause      = t.root_cause || 'unknown';
+    const trend      = t.trend || 'new';
+    const flakeV     = t.flakiness_score || 0;
+    const barColor   = flakeColor(flakeV);
+    const barWidth   = Math.min(100, flakeV * 100).toFixed(1);
+    const passRate   = ((t.pass_rate || 0) * 100).toFixed(1) + '%';
+    const flakePct   = (flakeV * 100).toFixed(1) + '%';
+    const trendLabel = TREND_LABEL[trend] || trend;
+    const raw        = t.test_id;
+    const short      = raw.length > 60 ? '…' + raw.slice(-59) : raw;
 
     return `<tr>
-      <td title="${t.test_id}">${shortId}</td>
-      <td><span class="sev-${sev}">${sev.toUpperCase()}</span></td>
-      <td><span class="badge badge-${cause}">${cause}</span></td>
-      <td>${passRate}</td>
-      <td>${flakePct}</td>
-      <td><span class="trend-${trend}">${trendIcon}</span></td>
-      <td>${spark}</td>
+      <td class="td-test" title="${raw}">${short}</td>
+      <td><span class="sev-pill sev-${sev}">${sev}</span></td>
+      <td class="td-muted">${cause}</td>
+      <td style="font-variant-numeric:tabular-nums">${passRate}</td>
+      <td class="flake-cell">
+        <div class="flake-pct" style="color:${barColor}">${flakePct}</div>
+        <div class="flake-track"><div class="flake-fill" style="width:${barWidth}%;background:${barColor}"></div></div>
+      </td>
+      <td><span class="trend-${trend}">${trendLabel}</span></td>
     </tr>`;
   }).join('');
 }
 
-function applyFilter() {
-  renderTable(allTests);
-}
+function applyFilter() { renderTable(allTests); }
 
 function sortTable(col) {
-  const ths = document.querySelectorAll('th');
-  ths.forEach((th, i) => {
-    th.classList.remove('sorted-asc', 'sorted-desc');
-  });
-
-  if (sortCol === col) {
-    sortDir *= -1;
-  } else {
-    sortCol = col;
-    sortDir = col === 4 ? -1 : 1; // flakiness default desc, others asc
-  }
-
-  ths[col].classList.add(sortDir === 1 ? 'sorted-asc' : 'sorted-desc');
+  document.querySelectorAll('thead th').forEach(th => th.classList.remove('sorted-asc', 'sorted-desc'));
+  if (sortCol === col) { sortDir *= -1; }
+  else { sortCol = col; sortDir = (col === 4 || col === 1) ? -1 : 1; }
+  document.querySelectorAll('thead th')[col].classList.add(sortDir === 1 ? 'sorted-asc' : 'sorted-desc');
 
   allTests.sort((a, b) => {
     let va, vb;
     switch (col) {
-      case 0: va = a.test_id; vb = b.test_id; break;
-      case 1: va = SEV_ORDER[a.severity||'none']; vb = SEV_ORDER[b.severity||'none']; break;
-      case 2: va = a.root_cause||''; vb = b.root_cause||''; break;
-      case 3: va = a.pass_rate; vb = b.pass_rate; break;
-      case 4: va = a.flakiness_score; vb = b.flakiness_score; break;
-      case 5: va = a.trend||''; vb = b.trend||''; break;
-      default: va = 0; vb = 0;
+      case 0: va = a.test_id;                        vb = b.test_id; break;
+      case 1: va = SEV_ORDER[a.severity || 'none'];  vb = SEV_ORDER[b.severity || 'none']; break;
+      case 2: va = a.root_cause || '';               vb = b.root_cause || ''; break;
+      case 3: va = a.pass_rate;                      vb = b.pass_rate; break;
+      case 4: va = a.flakiness_score;                vb = b.flakiness_score; break;
+      case 5: va = a.trend || '';                    vb = b.trend || ''; break;
+      default: return 0;
     }
     if (va < vb) return -sortDir;
-    if (va > vb) return sortDir;
+    if (va > vb) return  sortDir;
     return 0;
   });
-
   renderTable(allTests);
 }
 
-function renderChart(data) {
+function renderTrendChart(data) {
   const sessions = data.sessions || [];
-  const tests = data.tests || [];
-  const flaky = tests.filter(t => t.flakiness_score > 0.05);
+  const tests    = data.tests    || [];
+  const flaky    = tests.filter(t => (t.flakiness_score || 0) > 0.05).slice(0, 10);
+  const labels   = sessions.map(s => s.label || s.started_at.slice(0, 10));
 
-  const labels = sessions.map(s => s.label || s.started_at.slice(0,10));
-
-  const palette = [
-    '#f85149','#58a6ff','#3fb950','#d29922','#bc8cff',
-    '#ff7b72','#79c0ff','#56d364','#e3b341','#d2a8ff'
-  ];
-
-  const datasets = flaky.slice(0, 10).map((t, i) => {
-    const name = t.test_id.length > 40
-      ? '...' + t.test_id.slice(-37)
-      : t.test_id;
-    const pts = (t.sparkline_data || []).slice(0, labels.length);
+  const datasets = flaky.map((t, i) => {
+    const name = t.test_id.length > 40 ? '…' + t.test_id.slice(-39) : t.test_id;
+    const pts  = (t.sparkline_data || []).slice(0, labels.length);
     return {
       label: name,
       data: pts.map(v => +(v * 100).toFixed(1)),
-      borderColor: palette[i % palette.length],
-      backgroundColor: palette[i % palette.length] + '22',
-      borderWidth: 2,
+      borderColor: PALETTE[i % PALETTE.length],
+      backgroundColor: 'transparent',
+      borderWidth: 1.5,
       pointRadius: 3,
-      tension: 0.3,
-      fill: false,
+      pointHoverRadius: 4,
+      tension: 0.2,
     };
   });
 
   const ctx = document.getElementById('trend-chart').getContext('2d');
-  if (chart) chart.destroy();
+  if (trendChart) trendChart.destroy();
 
   if (datasets.length === 0) {
     ctx.fillStyle = '#7d8590';
-    ctx.font = '14px monospace';
+    ctx.font = '13px system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('No flaky tests detected — all clean!', ctx.canvas.width / 2, 100);
+    ctx.fillText('No flaky tests detected.', ctx.canvas.width / 2, 100);
     return;
   }
 
-  chart = new Chart(ctx, {
+  trendChart = new Chart(ctx, {
     type: 'line',
     data: { labels, datasets },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
+      responsive: true, maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
       plugins: {
-        legend: {
-          labels: {
-            color: '#e6edf3',
-            font: { family: 'monospace', size: 11 },
-            boxWidth: 12,
-          }
-        },
+        legend: { labels: { color: '#7d8590', font: { family: 'monospace', size: 10 }, boxWidth: 10, padding: 10 } },
         tooltip: {
-          backgroundColor: '#161b22',
-          borderColor: '#30363d',
-          borderWidth: 1,
-          titleColor: '#e6edf3',
-          bodyColor: '#7d8590',
-          callbacks: { label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.y}%` }
-        }
+          backgroundColor: '#161b22', borderColor: '#30363d', borderWidth: 1,
+          titleColor: '#e6edf3', bodyColor: '#7d8590',
+          callbacks: { label: c => ` ${c.dataset.label}: ${c.parsed.y}%` },
+        },
       },
       scales: {
-        x: {
-          ticks: { color: '#7d8590', font: { size: 11 } },
-          grid: { color: '#30363d' }
-        },
+        x: { ticks: { color: '#7d8590', font: { size: 11 } }, grid: { color: '#30363d' } },
         y: {
           min: 0, max: 100,
-          ticks: {
-            color: '#7d8590',
-            font: { size: 11 },
-            callback: v => v + '%'
-          },
-          grid: { color: '#30363d' }
-        }
-      }
-    }
+          ticks: { color: '#7d8590', font: { size: 11 }, callback: v => v + '%' },
+          grid: { color: '#30363d' },
+        },
+      },
+    },
+  });
+}
+
+function renderCauseChart(tests) {
+  const counts = {};
+  for (const t of tests) {
+    const c = t.root_cause || 'unknown';
+    counts[c] = (counts[c] || 0) + 1;
+  }
+  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  const labels  = entries.map(e => e[0]);
+  const values  = entries.map(e => e[1]);
+  const CAUSE_COLOR = { ordering: '#e3b341', timing: '#58a6ff', randomness: '#3fb950', network: '#f85149', unknown: '#7d8590' };
+  const colors  = labels.map(l => CAUSE_COLOR[l] || '#7d8590');
+
+  const ctx = document.getElementById('cause-chart').getContext('2d');
+  if (causeChart) causeChart.destroy();
+
+  if (labels.length === 0) {
+    ctx.fillStyle = '#7d8590';
+    ctx.font = '13px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('No data.', ctx.canvas.width / 2, 100);
+    return;
+  }
+
+  causeChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{ data: values, backgroundColor: colors, borderWidth: 0, borderRadius: 3 }],
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#161b22', borderColor: '#30363d', borderWidth: 1,
+          titleColor: '#e6edf3', bodyColor: '#7d8590',
+        },
+      },
+      scales: {
+        x: { ticks: { color: '#7d8590', font: { size: 11 }, stepSize: 1 }, grid: { color: '#30363d' } },
+        y: { ticks: { color: '#e6edf3', font: { size: 12 } }, grid: { display: false } },
+      },
+    },
   });
 }
 
 async function refresh() {
-  const data = await fetchData();
-  const s = data.summary || {};
+  const data  = await fetchData();
+  const s     = data.summary || {};
+  const flaky = s.flaky_count  || 0;
+  const total = s.unique_tests || 0;
+  const health = total > 0 ? Math.round((1 - flaky / total) * 100) : 100;
 
-  document.getElementById('subline').textContent =
-    `${DB_PATH} · ${s.total_runs||0} runs · ${s.sessions||0} sessions`;
+  document.getElementById('hdr-db').textContent      = DB_PATH || 'autopsy_results.db';
+  document.getElementById('hdr-refresh').textContent = 'Updated ' + new Date().toLocaleTimeString();
+  document.getElementById('c-total').textContent     = total;
+  document.getElementById('c-sessions').textContent  = s.sessions || 0;
 
-  document.getElementById('c-total').textContent = s.unique_tests || 0;
-  document.getElementById('c-flaky').textContent = s.flaky_count || 0;
-  document.getElementById('c-clean').textContent = s.clean_count || 0;
-  document.getElementById('c-sessions').textContent = s.sessions || 0;
+  const flakyEl  = document.getElementById('c-flaky');
+  flakyEl.textContent = flaky;
+  flakyEl.className   = 'card-value ' + (flaky > 0 ? 'red' : 'green');
 
-  const flakyCard = document.getElementById('c-flaky-card');
-  flakyCard.className = 'card ' + ((s.flaky_count || 0) > 0 ? 'flaky-red' : 'flaky-green');
+  const healthEl = document.getElementById('c-health');
+  healthEl.textContent = health + '%';
+  healthEl.className   = 'card-value ' + (health >= 90 ? 'green' : health >= 70 ? '' : 'red');
 
-  allTests = data.tests || [];
-  allTests.sort((a, b) => b.flakiness_score - a.flakiness_score);
+  allTests = (data.tests || []).sort((a, b) => b.flakiness_score - a.flakiness_score);
   renderTable(allTests);
-  renderChart(data);
-
-  const now = new Date().toLocaleTimeString();
-  document.getElementById('refresh-note').textContent = `Last updated: ${now}`;
+  renderTrendChart(data);
+  renderCauseChart(allTests);
 }
-
-const DB_PATH = document.querySelector('meta[name="db-path"]')?.content || 'unknown';
 
 refresh();
 setInterval(refresh, 30000);
