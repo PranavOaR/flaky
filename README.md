@@ -1,307 +1,234 @@
-# flaky-test-autopsy
+# Flaky Test Autopsy
 
-> Detect, track, and diagnose flaky tests in any pytest-based repository.
+> Detect flaky tests. Classify why. Get a fix.
 
-Most flakiness tools just retry. **flaky-test-autopsy** runs your full suite repeatedly with randomised execution order, captures structured per-test results, and tells you exactly which tests are flaky and how often — stored in SQLite so you can query and track it over time.
-
----
-
-## What problem does this solve?
-
-Flaky tests are tests that pass sometimes and fail other times without any code change. They're caused by:
-
-- **Ordering dependencies** — test A secretly mutates shared state that test B depends on
-- **Timing issues** — sleeps, timeouts, or race conditions
-- **Randomness** — unseeded `random` calls, shuffled data
-- **Network** — tests that hit real endpoints or DNS
-
-Standard pytest just shows you a failure. `pytest-rerunfailures` retries silently. Neither tells you *why* or *how often* — which is what you need to fix the root cause.
+[![PyPI version](https://img.shields.io/pypi/v/flaky-test-autopsy)](https://pypi.org/project/flaky-test-autopsy/)
+[![Python versions](https://img.shields.io/pypi/pyversions/flaky-test-autopsy)](https://pypi.org/project/flaky-test-autopsy/)
+[![Tests](https://img.shields.io/github/actions/workflow/status/PranavOaR/flaky/flaky-tests.yml)](https://github.com/PranavOaR/flaky/actions)
+[![License](https://img.shields.io/github/license/PranavOaR/flaky)](LICENSE)
 
 ---
 
-## Features (Day 4)
+## The problem
 
-- Runs your suite N times with a different random seed each time (via `pytest-randomly`)
-- Parses structured per-test results using `pytest-json-report` — handles parametrized tests, xfail/xpass, unicode, setup/teardown errors
-- Stores every result in SQLite after each run (incremental, never lost on crash)
-- **Wilson score lower bound** for statistically rigorous flakiness measurement (95% confidence)
-- **Root cause classifier** — labels each flaky test as `ordering`, `timing`, `randomness`, `network`, or `unknown`
-- Severity bands: `none` / `low` / `medium` / `high` / `critical`
-- `--explain` flag prints evidence bullets per flaky test
-- `autopsy info` and `autopsy score` subcommands for inspecting saved DBs
-- `--fresh` flag to wipe old data before a new run
+Flaky tests erode CI trust — teams learn to re-run failures without reading them, and real bugs hide behind habitual retries. Most tools just retry the test; they never tell you *why* it failed or how often it will keep failing.
+
+## What Autopsy does differently
+
+- **Detects** which tests are genuinely flaky using Wilson score confidence intervals, not raw pass rates
+- **Classifies** each flaky test by root cause: ordering dependency, timing race, randomness, or network
+- **Suggests fixes** — template code snippets plus optional AI-powered analysis via Claude
+- **Tracks trends** across sessions so you know whether a flaky test is getting worse, improving, or newly introduced
 
 ---
 
-## Installation
+## Install
 
-**Requires Python 3.10+**
-
-From PyPI (coming soon):
 ```bash
 pip install flaky-test-autopsy
 ```
 
-From source (development):
+---
+
+## Quick start
+
 ```bash
-git clone https://github.com/PranavOaR/flaky.git
-cd flaky
-uv venv .venv && uv pip install -e .
-# or: pip install -e .
+# Run your suite 10 times with randomised order; score and classify results
+autopsy run ./tests --runs 10
+
+# Show scored results from a saved DB
+autopsy score ./autopsy_results.db --explain
+
+# Get fix suggestions for all flaky tests
+autopsy fix ./autopsy_results.db
+
+# Track trends across multiple sessions
+autopsy trend ./autopsy_results.db
 ```
 
 ---
 
-## Usage
+## Commands
 
-### `autopsy run`
+### `autopsy run <path>`
+
+Runs your pytest suite `--runs` times with a new random seed each time (via `pytest-randomly`). Results are written to `autopsy_results.db` in the current directory.
 
 ```bash
-autopsy run <path> [--runs N] [--workers W] [--verbose] [--fresh]
+autopsy run ./tests --runs 20 --label "post-refactor"
+autopsy run ./tests --runs 10 --workers 2   # parallel workers
+autopsy run ./tests --runs 5 --fresh        # wipe old data first
 ```
 
-| Argument / Flag | Default | Description |
-|---|---|---|
-| `path` | required | Path to a pytest-based project or test directory |
-| `--runs N` | `10` | How many times to run the full suite |
-| `--workers W` | `1` | Parallel workers (sequential if 1) |
-| `--verbose` | off | Stream live pytest output instead of suppressing it |
-| `--fresh` | off | Clear any existing DB data before running |
+After running, prints a scored summary table:
 
-**Examples:**
-
-```bash
-# Quick check — 10 runs against a local project
-autopsy run ./my-project
-
-# Higher confidence — 30 runs
-autopsy run ./my-project --runs 30
-
-# Fresh run, streaming pytest output
-autopsy run ./my-project --runs 20 --fresh --verbose
-
-# Against a subdirectory of tests
-autopsy run ./my-project/tests/integration --runs 15
+```
+ Test                                     Runs  Pass rate  Flakiness  Severity  Root cause
+ tests/test_flaky.py::test_sometimes        20      50.0%      26.4%    MEDIUM  randomness
+ tests/test_order.py::test_depends_on_a     20      45.0%      22.3%    MEDIUM  ordering
+ tests/test_stable.py::test_always_passes   20     100.0%       0.0%      NONE  —
 ```
 
-### `autopsy score`
+### `autopsy score <db_path>`
+
+Re-score results from an existing DB without re-running tests.
 
 ```bash
-autopsy score [db_path] [--min-runs N] [--threshold F] [--all] [--explain]
+autopsy score ./autopsy_results.db
+autopsy score ./autopsy_results.db --explain        # show evidence bullets
+autopsy score ./autopsy_results.db --all            # include stable tests
+autopsy score ./autopsy_results.db --threshold 0.1  # stricter threshold
 ```
 
-Score and classify flaky tests in an existing results DB. Defaults to `./autopsy_results.db`.
+### `autopsy fix <db_path>`
 
-| Flag | Default | Description |
-|---|---|---|
-| `--min-runs N` | `5` | Skip tests with fewer than N real outcomes |
-| `--threshold F` | `0.05` | Wilson lower-bound flakiness threshold for the "is_flaky" cutoff |
-| `--all` | off | Show non-flaky tests too (default: only flaky) |
-| `--explain` | off | Print evidence bullets per flaky test |
+Generate fix suggestions for every flaky test.
 
 ```bash
-# Show only flaky tests with their root cause
-autopsy score
-
-# Show evidence for each flaky test
-autopsy score --explain
-
-# Show all tests, with a stricter threshold and 10-run minimum
-autopsy score --all --threshold 0.10 --min-runs 10
+autopsy fix ./autopsy_results.db
+autopsy fix ./autopsy_results.db --ai              # Claude-powered analysis
+autopsy fix ./autopsy_results.db --output fixes.md # write Markdown report
 ```
 
-### `autopsy info`
+### `autopsy trend <db_path>`
+
+Compare flakiness across sessions and detect regressions.
 
 ```bash
-autopsy info [db_path]
+autopsy trend ./autopsy_results.db
+autopsy trend ./autopsy_results.db --regressions-only
+autopsy trend ./autopsy_results.db --output trend_report.md
 ```
 
-Inspect a saved results database. Defaults to `./autopsy_results.db`.
+### `autopsy ci <path>`
+
+Composite command designed for CI pipelines. Runs the suite, scores results, compares against a baseline, and exits 0 (clean), 1 (regressions detected), or 2 (error).
 
 ```bash
-autopsy info
-autopsy info ./autopsy_results.db
+autopsy ci ./tests --runs 5 --baseline ./baseline/autopsy_results.db --output report.md
+```
+
+### `autopsy dashboard <db_path>`
+
+Serve a local web dashboard with summary cards, a Chart.js flakiness trend chart, and a sortable, filterable test table.
+
+```bash
+autopsy dashboard ./autopsy_results.db
+autopsy dashboard ./autopsy_results.db --port 9000 --no-browser
+```
+
+![Dashboard](docs/dashboard.png)
+
+### `autopsy init-ci`
+
+Generate a `.github/workflows/flaky-tests.yml` workflow that runs on push, pull request, and a nightly cron schedule.
+
+```bash
+autopsy init-ci --runs 10 --schedule "0 3 * * *"
 ```
 
 ---
 
-## Sample output
+## CI Integration
 
-### During run
+Use `autopsy ci` on every PR to catch regressions before merge. The workflow below saves the baseline DB as an artifact on `main` pushes, then downloads and compares on PRs.
 
-```
-autopsy running tests/fixtures/sample_suite × 10 runs
+```yaml
+name: Flaky Test Detection
 
-  Run 10/10 complete ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 10/10  9 failure(s) so far
-```
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '0 2 * * *'
 
-### Scored summary table
+jobs:
+  flaky-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-```
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳══════┳═══════════┳═══════════┳══════════┳═════════════┓
-┃ Test                                                ┃ Runs ┃ Pass rate ┃ Flakiness ┃ Severity ┃ Root cause  ┃
-┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇══════╇═══════════╇═══════════╇══════════╇═════════════┩
-│ tests/test_network.py::test_fake_network_call       │   10 │      0.0% │     72.2% │ CRITICAL │ network     │
-│ tests/test_ordering.py::test_depends_on_state       │   10 │     20.0% │     49.0% │   HIGH   │ ordering    │
-│ tests/test_flaky.py::test_sometimes_fails           │   10 │     70.0% │     10.8% │  MEDIUM  │ randomness  │
-└─────────────────────────────────────────────────────┴──────┴───────────┴───────────┴──────────┴─────────────┘
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-3 flaky test(s) detected out of 12 total (95% confidence)
-```
+      - name: Install dependencies
+        run: |
+          pip install flaky-test-autopsy
+          pip install -r requirements.txt
 
-### `autopsy score --explain` evidence
+      - name: Download baseline DB (if exists)
+        uses: actions/download-artifact@v4
+        with:
+          name: autopsy-baseline
+          path: ./baseline
+        continue-on-error: true
 
-```
-tests/test_network.py::test_fake_network_call
-  network  (high confidence)
-    • failure output contains network keyword 'connection'
-    • failure output contains network keyword 'refused'
-    • failure output contains network keyword '503'
+      - name: Run flaky test detection
+        run: |
+          autopsy ci . --runs 10 \
+            --baseline ./baseline/autopsy_results.db \
+            --output autopsy_ci_report.md
 
-tests/test_ordering.py::test_depends_on_state
-  ordering  (medium confidence)
-    • pass rate in runs 1-5: 0%, runs 6-10: 40%
-    • correlation between run position and failure: 0.40
+      - name: Upload results as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autopsy-baseline
+          path: autopsy_results.db
 
-tests/test_flaky.py::test_sometimes_fails
-  randomness  (high confidence)
-    • failure output contains keyword 'random'
-    • failures uniformly distributed across 10 runs (no clustering)
-```
-
-### `autopsy info` output
-
-```
-Database: ./autopsy_results.db
-Total runs recorded: 10
-Unique tests seen:   12
-First run: 2024-01-15T10:23:01+00:00
-Last run:  2024-01-15T10:23:45+00:00
-
-Run breakdown:
-┏━━━━━┳━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━┓
-┃ Run ┃       Seed ┃ Tests ┃ Duration ┃
-┡━━━━━╇━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━┩
-│   1 │  400436084 │    12 │    0.21s │
-│   2 │ 1004408758 │    12 │    0.22s │
-   ...
+      - name: Upload CI report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autopsy-report
+          path: autopsy_ci_report.md
 ```
 
 ---
 
-## How it works
+## Root cause categories
 
-1. **Randomised runs** — each run passes a unique `--randomly-seed` to `pytest-randomly`, shuffling test execution order to surface ordering dependencies
-2. **Structured parsing** — uses `pytest-json-report` to capture per-test outcome, duration, and failure tracebacks as structured JSON (not fragile stdout scraping)
-3. **Incremental persistence** — results are written to SQLite after *every* run, so a crash midway loses nothing
-4. **Outcome mapping** — `xfailed` → skipped (expected failure, not a real flake), `xpassed` → failed (unexpectedly passed, worth flagging)
-5. **Wilson score lower bound** — flakiness is the conservative 95% lower bound on the failure rate, so a test with 1/2 failures isn't ranked the same as 50/100. With 5/10 failures, score ≈ 24%; with 50/100 failures, score ≈ 41%
-6. **Severity bands** — `0` = none · `≤0.10` = low · `≤0.30` = medium · `≤0.60` = high · `>0.60` = critical
-
-### Root cause classification
-
-For each flaky test, the classifier runs four heuristics and returns the highest-priority match (network → timing → ordering → randomness → unknown):
-
-| Cause | Signal |
-|---|---|
-| **network** | Failure traceback contains keywords like `connection`, `refused`, `socket`, `dns`, `404`, `503`, `ssl`, `urllib`, `requests`, … |
-| **timing** | Failures take noticeably longer than passes (≥1.5×), or contain `timeout`, `sleep`, `race`, `async`, … |
-| **ordering** | Pass rate in first half of runs differs from second half by >30% (suggests test order matters) |
-| **randomness** | Failures are uniformly distributed (no clustering), or contain `random`, `uuid`, `shuffle`, `hash`, … |
-| **unknown** | None of the above fired |
+| Category | What it means |
+|----------|---------------|
+| `ordering` | Test relies on execution order — passes alone, fails when another test runs first |
+| `timing` | Race condition or brittle sleep/timeout that fails under load or slow CI |
+| `randomness` | Unseeded `random`, `uuid`, or hash seed causing non-deterministic behavior |
+| `network` | Test hits a real endpoint or DNS; fails when the network is slow or unavailable |
 
 ---
 
-## Database schema
+## How the scoring works
 
-Results are stored in `autopsy_results.db` (SQLite, current working directory).
-
-```sql
--- One row per pytest run
-CREATE TABLE runs (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_index   INTEGER,   -- 1-based run number
-    seed        INTEGER,   -- random seed used for test ordering
-    started_at  TEXT,      -- ISO 8601 UTC timestamp
-    duration_s  REAL       -- total run wall-clock time
-);
-
--- One row per test per run
-CREATE TABLE results (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id      INTEGER REFERENCES runs(id),
-    test_id     TEXT,      -- full pytest node id, e.g. tests/test_foo.py::test_bar
-    status      TEXT,      -- 'passed' | 'failed' | 'error' | 'skipped'
-    duration_s  REAL,      -- individual test duration
-    stdout      TEXT       -- captured output + failure traceback
-);
-```
-
-You can query it directly:
-
-```bash
-sqlite3 autopsy_results.db \
-  "SELECT test_id, COUNT(*) runs, SUM(status='failed') fails FROM results GROUP BY test_id"
-```
+Autopsy uses the **Wilson score lower bound** (95% confidence) rather than raw failure rate. A test that failed 1 time in 5 runs might just be bad luck; Wilson score accounts for sample size and returns a conservative lower bound on the true failure rate. `flakiness_score` is this lower bound — a test is considered flaky when it exceeds 0.05 (5%). Severity bands: low ≤ 10%, medium ≤ 30%, high ≤ 60%, critical > 60%. This approach eliminates false positives from small sample sizes and gives you a number you can track over time.
 
 ---
 
-## Project structure
+## Contributing
 
-```
-flaky-test-autopsy/
-├── autopsy/
-│   ├── cli.py          # Click entry points (autopsy run, score, info)
-│   ├── runner.py       # Subprocess pytest runner + JSON report parser
-│   ├── scorer.py       # Wilson score + root cause classifier
-│   ├── db.py           # SQLite schema, inserts, and query layer
-│   └── models.py       # TestResult, RunRecord, FlakinessReport, RootCause
-├── tests/
-│   ├── test_db.py      # Unit tests for db.py query layer
-│   ├── test_scorer.py  # Unit tests for Wilson math + classifiers
-│   └── fixtures/
-│       └── sample_suite/
-│           ├── test_stable.py      # Always passes
-│           ├── test_flaky.py       # Fails ~40% of the time (randomness)
-│           ├── test_ordering.py    # Fails when run out of order
-│           ├── test_network.py     # Always fails with a network-style traceback
-│           └── test_edge_cases.py  # Parametrized, xfail, unicode, slow
-├── pyproject.toml
-└── CLAUDE.md
-```
-
----
-
-## Development
-
-```bash
-# Clone and set up
-git clone https://github.com/PranavOaR/flaky.git
-cd flaky
-uv venv .venv && uv pip install -e .
-
-# Run the sample suite (end-to-end test of the tool itself)
-.venv/bin/autopsy run ./tests/fixtures/sample_suite --runs 10 --fresh
-
-# Run unit tests (db + scorer)
-.venv/bin/python -m pytest tests/test_db.py tests/test_scorer.py -v
-```
-
----
-
-## Roadmap
-
-| Day | Scope | Status |
-|-----|-------|--------|
-| 1 | Runner harness — subprocess pytest, SQLite, progress bar, summary table | Done |
-| 2 | JSON report parser, full DB query layer, `autopsy info`, `--fresh` | Done |
-| 3–4 | Wilson flakiness scorer + classifier (network / timing / ordering / randomness), `autopsy score`, `--explain` | Done |
-| 5–7 | Root cause analysis per flakiness class | Planned |
-| 8–11 | Targeted fix suggestions | Planned |
-| 12–13 | React dashboard + GitHub Action | Planned |
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions, how to add a new root cause classifier, and PR requirements.
 
 ---
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
+
+---
+
+## Releasing a new version
+
+1. Bump version in `pyproject.toml`
+2. Add entry to `CHANGELOG.md`
+3. `git tag v0.1.0 && git push --tags`
+4. Create a GitHub Release — PyPI publish triggers automatically
+
+## Roadmap
+
+- [ ] VS Code extension
+- [ ] GitLab CI native integration
+- [ ] JavaScript/Jest support
+- [ ] Flakiness heatmap by file/module
+- [ ] Slack/Discord notifications for regressions
+- [ ] `autopsy watch` — continuous monitoring mode

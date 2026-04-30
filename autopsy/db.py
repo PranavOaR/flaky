@@ -13,17 +13,20 @@ def open_db(path: Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     _create_schema(conn)
     create_ai_fixes_table(conn)
+    _migrate_session_id(conn)
     return conn
 
 
 def _create_schema(conn: sqlite3.Connection) -> None:
+    """Create the base schema tables if they do not already exist."""
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS runs (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             run_index   INTEGER,
             seed        INTEGER,
             started_at  TEXT,
-            duration_s  REAL
+            duration_s  REAL,
+            session_id  TEXT
         );
 
         CREATE TABLE IF NOT EXISTS results (
@@ -34,7 +37,45 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             duration_s  REAL,
             stdout      TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS sessions (
+            id          TEXT PRIMARY KEY,
+            started_at  TEXT NOT NULL,
+            label       TEXT,
+            run_count   INTEGER NOT NULL,
+            repo_path   TEXT
+        );
     """)
+    conn.commit()
+
+
+def _migrate_session_id(conn: sqlite3.Connection) -> None:
+    """Add session_id column to runs if missing; backfill legacy rows."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
+    if "session_id" in cols:
+        return
+
+    conn.execute("ALTER TABLE runs ADD COLUMN session_id TEXT")
+
+    # Assign all existing rows to the legacy session
+    legacy_id = "legacy-session-001"
+    conn.execute("UPDATE runs SET session_id = ? WHERE session_id IS NULL", (legacy_id,))
+
+    # Create the legacy session row only if there are actual legacy runs
+    count = conn.execute("SELECT COUNT(*) FROM runs WHERE session_id = ?", (legacy_id,)).fetchone()[0]
+    if count > 0:
+        first_at = conn.execute(
+            "SELECT MIN(started_at) FROM runs WHERE session_id = ?", (legacy_id,)
+        ).fetchone()[0] or datetime.now(timezone.utc).isoformat()
+
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO sessions (id, started_at, label, run_count, repo_path)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (legacy_id, first_at, "legacy", count, None),
+        )
+
     conn.commit()
 
 
@@ -83,11 +124,15 @@ def save_ai_fix(
 
 # ── write ─────────────────────────────────────────────────────────────────────
 
-def insert_run(conn: sqlite3.Connection, record: RunRecord) -> int:
+def insert_run(
+    conn: sqlite3.Connection,
+    record: RunRecord,
+    session_id: "str | None" = None,
+) -> int:
     """Insert a completed run and all its test results; return the run's row id."""
     cur = conn.execute(
-        "INSERT INTO runs (run_index, seed, started_at, duration_s) VALUES (?,?,?,?)",
-        (record.run_index, record.seed, record.started_at, record.duration_s),
+        "INSERT INTO runs (run_index, seed, started_at, duration_s, session_id) VALUES (?,?,?,?,?)",
+        (record.run_index, record.seed, record.started_at, record.duration_s, session_id),
     )
     run_id = cur.lastrowid
     conn.executemany(
@@ -99,6 +144,25 @@ def insert_run(conn: sqlite3.Connection, record: RunRecord) -> int:
     )
     conn.commit()
     return run_id
+
+
+def create_session(
+    conn: sqlite3.Connection,
+    session_id: str,
+    started_at: str,
+    label: "str | None",
+    run_count: int,
+    repo_path: str,
+) -> None:
+    """Insert a session record into the sessions table."""
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO sessions (id, started_at, label, run_count, repo_path)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (session_id, started_at, label, run_count, repo_path),
+    )
+    conn.commit()
 
 
 def clear_results(conn: sqlite3.Connection) -> None:
@@ -215,6 +279,42 @@ def get_run_detail(conn: sqlite3.Connection) -> list[dict]:
         ORDER BY ru.run_index
     """).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── sessions ──────────────────────────────────────────────────────────────────
+
+def get_all_sessions(conn: sqlite3.Connection) -> list[dict]:
+    """Return all sessions ordered by started_at ASC."""
+    rows = conn.execute(
+        "SELECT * FROM sessions ORDER BY started_at ASC"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_results_by_session(conn: sqlite3.Connection) -> dict[str, dict[str, list[str]]]:
+    """Return nested {session_id: {test_id: [status, ...]}} structure."""
+    rows = conn.execute("""
+        SELECT ru.session_id, re.test_id, re.status
+        FROM results re
+        JOIN runs ru ON ru.id = re.run_id
+        ORDER BY ru.session_id, ru.run_index ASC
+    """).fetchall()
+
+    result: dict[str, dict[str, list[str]]] = {}
+    for row in rows:
+        sid = row["session_id"] or "legacy-session-001"
+        tid = row["test_id"]
+        st = row["status"]
+        result.setdefault(sid, {}).setdefault(tid, []).append(st)
+    return result
+
+
+def get_session_for_run(conn: sqlite3.Connection, run_id: int) -> "str | None":
+    """Return session_id for a given run_id."""
+    row = conn.execute(
+        "SELECT session_id FROM runs WHERE id = ?", (run_id,)
+    ).fetchone()
+    return row["session_id"] if row else None
 
 
 # ── debug ──────────────────────────────────────────────────────────────────────

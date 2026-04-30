@@ -34,6 +34,7 @@ def run_suite(
     verbose: bool,
     conn: sqlite3.Connection,
     console: Console,
+    session_id: "str | None" = None,
 ) -> None:
     """Execute the pytest suite `num_runs` times and store results in `conn`."""
     console.print(f"\n[bold cyan]autopsy[/] running [bold]{suite_path}[/] × {num_runs} runs\n")
@@ -56,7 +57,7 @@ def run_suite(
             record = _execute_run(suite_path, run_index=i, seed=seed, verbose=verbose, console=console)
             run_failures = sum(1 for r in record.results if r.status in ("failed", "error"))
             total_failures += run_failures
-            insert_run(conn, record)
+            insert_run(conn, record, session_id=session_id)
             progress.update(
                 task,
                 advance=1,

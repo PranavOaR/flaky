@@ -6,11 +6,15 @@ import pytest
 
 from autopsy.db import (
     clear_results,
+    create_session,
+    get_all_sessions,
     get_all_test_ids,
     get_cached_ai_fix,
+    get_results_by_session,
     get_results_for_test,
     get_results_matrix,
     get_run_summary,
+    get_session_for_run,
     insert_run,
     open_db,
     save_ai_fix,
@@ -146,5 +150,110 @@ def test_cache_roundtrip(tmp_path):
     # Upsert same key — should overwrite
     save_ai_fix(conn, "t::foo", "network", "Updated fix.", "claude-opus-4-7")
     assert get_cached_ai_fix(conn, "t::foo", "network") == "Updated fix."
+
+    conn.close()
+
+
+# ── session tests ──────────────────────────────────────────────────────────────
+
+def test_create_session(tmp_path):
+    """create_session persists a row that get_all_sessions returns."""
+    conn = open_db(tmp_path / "test.db")
+
+    create_session(
+        conn,
+        session_id="sess-abc",
+        started_at="2024-06-01T10:00:00+00:00",
+        label="baseline",
+        run_count=5,
+        repo_path="/some/path",
+    )
+
+    sessions = get_all_sessions(conn)
+    ids = [s["id"] for s in sessions]
+    assert "sess-abc" in ids
+
+    sess = next(s for s in sessions if s["id"] == "sess-abc")
+    assert sess["label"] == "baseline"
+    assert sess["run_count"] == 5
+    assert sess["repo_path"] == "/some/path"
+
+    conn.close()
+
+
+def test_get_results_by_session(tmp_path):
+    """get_results_by_session returns correct nested structure."""
+    conn = open_db(tmp_path / "test.db")
+
+    create_session(conn, "s1", "2024-01-01T00:00:00+00:00", "first", 2, "/p")
+    create_session(conn, "s2", "2024-01-02T00:00:00+00:00", "second", 2, "/p")
+
+    tests = ["suite::test_a", "suite::test_b"]
+
+    insert_run(conn, _make_run(1, tests, ["passed", "failed"]), session_id="s1")
+    insert_run(conn, _make_run(2, tests, ["passed", "passed"]), session_id="s1")
+    insert_run(conn, _make_run(3, tests, ["failed", "passed"]), session_id="s2")
+
+    by_session = get_results_by_session(conn)
+
+    assert "s1" in by_session
+    assert "s2" in by_session
+
+    s1_test_a = by_session["s1"]["suite::test_a"]
+    assert "passed" in s1_test_a
+    assert len(s1_test_a) == 2
+
+    s2_test_a = by_session["s2"]["suite::test_a"]
+    assert s2_test_a == ["failed"]
+
+    conn.close()
+
+
+def test_session_migration(tmp_path):
+    """Opening a DB missing session_id column triggers migration without error."""
+    db_path = tmp_path / "legacy.db"
+
+    # Create an old-style DB without session_id column or sessions table
+    conn_old = sqlite3.connect(str(db_path))
+    conn_old.executescript("""
+        CREATE TABLE runs (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_index   INTEGER,
+            seed        INTEGER,
+            started_at  TEXT,
+            duration_s  REAL
+        );
+        CREATE TABLE results (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id      INTEGER,
+            test_id     TEXT,
+            status      TEXT,
+            duration_s  REAL,
+            stdout      TEXT
+        );
+        INSERT INTO runs (run_index, seed, started_at, duration_s)
+        VALUES (1, 99, '2024-03-01T00:00:00+00:00', 1.0);
+        INSERT INTO results (run_id, test_id, status, duration_s, stdout)
+        VALUES (1, 'legacy::test_x', 'passed', 0.2, '');
+    """)
+    conn_old.commit()
+    conn_old.close()
+
+    # open_db must not raise
+    conn = open_db(db_path)
+
+    # session_id column must now exist
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
+    assert "session_id" in cols
+
+    # Legacy run must be assigned to legacy session
+    row = conn.execute("SELECT session_id FROM runs WHERE id = 1").fetchone()
+    assert row["session_id"] == "legacy-session-001"
+
+    # Legacy session row must exist in sessions table
+    sess = conn.execute(
+        "SELECT * FROM sessions WHERE id = 'legacy-session-001'"
+    ).fetchone()
+    assert sess is not None
 
     conn.close()
