@@ -58,7 +58,6 @@ Runs your pytest suite `--runs` times with a new random seed each time (via `pyt
 
 ```bash
 autopsy run ./tests --runs 20 --label "post-refactor"
-autopsy run ./tests --runs 10 --workers 2   # parallel workers
 autopsy run ./tests --runs 5 --fresh        # wipe old data first
 ```
 
@@ -80,6 +79,7 @@ autopsy score ./autopsy_results.db
 autopsy score ./autopsy_results.db --explain        # show evidence bullets
 autopsy score ./autopsy_results.db --all            # include stable tests
 autopsy score ./autopsy_results.db --threshold 0.1  # stricter threshold
+autopsy score ./autopsy_results.db --json           # machine-readable output
 ```
 
 ### `autopsy fix <db_path>`
@@ -90,7 +90,10 @@ Generate fix suggestions for every flaky test.
 autopsy fix ./autopsy_results.db
 autopsy fix ./autopsy_results.db --ai              # Claude-powered analysis
 autopsy fix ./autopsy_results.db --output fixes.md # write Markdown report
+autopsy fix ./autopsy_results.db --ai --model claude-sonnet-4-6
 ```
+
+The AI model is also configurable via the `AUTOPSY_AI_MODEL` environment variable (default: `claude-opus-4-7`).
 
 ### `autopsy trend <db_path>`
 
@@ -108,6 +111,7 @@ Composite command designed for CI pipelines. Runs the suite, scores results, com
 
 ```bash
 autopsy ci ./tests --runs 5 --baseline ./baseline/autopsy_results.db --output report.md
+autopsy ci ./tests --runs 5 --json-output report.json   # for downstream tooling
 ```
 
 ### `autopsy dashboard <db_path>`

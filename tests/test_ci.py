@@ -223,6 +223,30 @@ def test_ci_plain_output(tmp_path, monkeypatch):
 
 # ── init-ci tests ──────────────────────────────────────────────────────────────
 
+def test_ci_json_output(tmp_path):
+    """`autopsy ci --json-output FILE` writes a parseable JSON report."""
+    import json as _json
+
+    runner = CliRunner()
+    out_path = tmp_path / "report.json"
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        result = runner.invoke(ci_cmd, [
+            str(SAMPLE_SUITE),
+            "--runs", "2",
+            "--min-runs", "2",
+            "--no-ai",
+            "--json-output", str(out_path),
+        ])
+
+    assert result.exit_code in (0, 1)
+    assert out_path.exists()
+    payload = _json.loads(out_path.read_text())
+    assert payload["schema_version"] == 1
+    assert "tests" in payload
+    assert "summary" in payload
+    assert "regressions" in payload["summary"]
+
+
 def test_init_ci_creates_file(tmp_path):
     """autopsy init-ci creates .github/workflows/flaky-tests.yml."""
     runner = CliRunner()

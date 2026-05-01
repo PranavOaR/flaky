@@ -1,5 +1,6 @@
 """Click CLI entry points for flaky-test-autopsy."""
 
+import json
 import os
 import sys
 import uuid
@@ -12,6 +13,7 @@ from rich.rule import Rule
 from rich.syntax import Syntax
 from rich.table import Table
 
+from autopsy import __version__
 from autopsy.banner import print_banner
 from autopsy.db import (
     clear_results,
@@ -25,7 +27,7 @@ from autopsy.db import (
 )
 from autopsy.models import FlakinessReport, FixSuggestion
 from autopsy.runner import run_suite
-from autopsy.scorer import filter_flaky, score_from_conn
+from autopsy.scorer import _REAL_OUTCOMES, filter_flaky, score_from_conn
 
 _DB_FILENAME = "autopsy_results.db"
 
@@ -46,9 +48,14 @@ _CAUSE_STYLES = {
 }
 
 
-@click.group()
-def main() -> None:
+@click.group(invoke_without_command=True)
+@click.version_option(__version__, "-V", "--version", prog_name="autopsy")
+@click.pass_context
+def main(ctx: click.Context) -> None:
     """flaky-test-autopsy: detect and diagnose flaky tests."""
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
+        return
     print_banner()
 
 
@@ -57,11 +64,10 @@ def main() -> None:
 @main.command("run")
 @click.argument("path", type=click.Path(exists=False))
 @click.option("--runs", default=10, show_default=True, help="Number of full suite reruns.")
-@click.option("--workers", default=1, show_default=True, help="Parallel workers (sequential if 1).")
 @click.option("--verbose", is_flag=True, default=False, help="Stream pytest output live.")
 @click.option("--fresh", is_flag=True, default=False, help="Clear existing DB data before running.")
 @click.option("--label", default=None, help="Human-readable label for this session.")
-def run_cmd(path: str, runs: int, workers: int, verbose: bool, fresh: bool, label: "str | None") -> None:
+def run_cmd(path: str, runs: int, verbose: bool, fresh: bool, label: "str | None") -> None:
     """Run a pytest suite repeatedly, then score and classify flaky tests."""
     console = Console()
     suite_path = Path(path)
@@ -84,7 +90,6 @@ def run_cmd(path: str, runs: int, workers: int, verbose: bool, fresh: bool, labe
         run_suite(
             suite_path=suite_path,
             num_runs=runs,
-            workers=workers,
             verbose=verbose,
             conn=conn,
             console=console,
@@ -112,19 +117,35 @@ def run_cmd(path: str, runs: int, workers: int, verbose: bool, fresh: bool, labe
 @click.option("--threshold", default=0.05, show_default=True, type=float, help="Flakiness threshold.")
 @click.option("--all", "show_all", is_flag=True, default=False, help="Show non-flaky tests too.")
 @click.option("--explain", is_flag=True, default=False, help="Print evidence per flaky test.")
-def score_cmd(db_path: str, min_runs: int, threshold: float, show_all: bool, explain: bool) -> None:
+@click.option("--json", "as_json", is_flag=True, default=False,
+              help="Emit machine-readable JSON to stdout instead of the table.")
+def score_cmd(
+    db_path: str,
+    min_runs: int,
+    threshold: float,
+    show_all: bool,
+    explain: bool,
+    as_json: bool,
+) -> None:
     """Score and classify flaky tests in an existing results DB."""
     console = Console()
     path = Path(db_path)
 
     if not path.exists():
-        console.print(f"[bold red]Error:[/] database not found: {path}")
+        if as_json:
+            click.echo(json.dumps({"error": f"database not found: {path}"}))
+        else:
+            console.print(f"[bold red]Error:[/] database not found: {path}")
         raise SystemExit(1)
 
     conn = open_db(path)
     try:
         reports = score_from_conn(conn, min_runs=min_runs, flaky_threshold=threshold)
-        _print_scored_table(reports, path, console, only_flaky=not show_all, explain=explain)
+        if as_json:
+            payload = _reports_to_json(reports, db_path=path, threshold=threshold)
+            click.echo(json.dumps(payload, indent=2))
+        else:
+            _print_scored_table(reports, path, console, only_flaky=not show_all, explain=explain)
     finally:
         conn.close()
 
@@ -162,6 +183,8 @@ def info_cmd(db_path: str) -> None:
               help="Flakiness threshold.")
 @click.option("--output", type=click.Path(), default=None,
               help="Write Markdown report to FILE instead of printing.")
+@click.option("--model", "model", default=None,
+              help="AI model id (overrides AUTOPSY_AI_MODEL env; default: claude-opus-4-7).")
 def fix_cmd(
     db_path: str,
     use_ai: bool,
@@ -169,6 +192,7 @@ def fix_cmd(
     min_runs: int,
     threshold: float,
     output: "str | None",
+    model: "str | None",
 ) -> None:
     """Generate fix suggestions for flaky tests in a results DB."""
     from autopsy.fixer import get_fix_suggestion
@@ -209,6 +233,7 @@ def fix_cmd(
                 conn=conn,
                 use_ai=use_ai,
                 use_cache=not no_cache,
+                model=model,
             )
             pairs.append((r, suggestion))
 
@@ -265,6 +290,8 @@ def _is_plain_output() -> bool:
               help="Minimum runs before flagging a test.")
 @click.option("--output", type=click.Path(), default=None,
               help="Write markdown CI report to FILE.")
+@click.option("--json-output", "json_output", type=click.Path(), default=None,
+              help="Write machine-readable JSON report to FILE.")
 @click.option("--no-ai", "no_ai", is_flag=True, default=False,
               help="Skip AI fix suggestions.")
 def ci_cmd(
@@ -275,6 +302,7 @@ def ci_cmd(
     regression_threshold: float,
     min_runs: int,
     output: "str | None",
+    json_output: "str | None",
     no_ai: bool,
 ) -> None:
     """Run suite, score, compare baseline, exit 0/1/2 for CI."""
@@ -309,7 +337,6 @@ def ci_cmd(
         run_suite(
             suite_path=suite_path,
             num_runs=runs,
-            workers=1,
             verbose=False,
             conn=conn,
             console=console,
@@ -371,9 +398,8 @@ def ci_cmd(
             results_by_session = get_results_by_session(conn)
             if prev_sid in results_by_session:
                 baseline_scores = {}
-                _REAL = ("passed", "failed", "error")
                 for tid, statuses in results_by_session[prev_sid].items():
-                    relevant = [s for s in statuses if s in _REAL]
+                    relevant = [s for s in statuses if s in _REAL_OUTCOMES]
                     total = len(relevant)
                     fails = sum(1 for s in relevant if s in ("failed", "error"))
                     baseline_scores[tid] = _wlb(fails, total)
@@ -449,6 +475,32 @@ def ci_cmd(
             print(f"Details: {output}")
         else:
             console.print(f"[green]CI report written to:[/] {output}\n")
+
+    # Write JSON report if requested
+    if json_output:
+        payload = {
+            "schema_version": 1,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "repo": str(path),
+            "runs": runs,
+            "session_label": label,
+            "baseline_label": baseline_label,
+            "duration_s": round(duration_s, 3),
+            "summary": {
+                "total_tests": len(reports),
+                "flaky_tests": sum(1 for r in reports if r.is_flaky),
+                "regressions": len(regressions),
+            },
+            "tests": [_report_to_dict(r) for r in reports],
+            "comparisons": comparisons,
+        }
+        Path(json_output).write_text(
+            json.dumps(payload, indent=2, default=str), encoding="utf-8"
+        )
+        if plain:
+            print(f"JSON: {json_output}")
+        else:
+            console.print(f"[green]JSON report written to:[/] {json_output}\n")
 
     raise SystemExit(1 if regressions else 0)
 
@@ -542,7 +594,10 @@ def _print_ci_summary(
                 delta_cell = f"[bold red]{sign}{delta_pct:.0f}%[/]"
             elif r.is_flaky:
                 status_cell = "[yellow]WARN[/]"
-                delta_cell = comp["delta"] and f"{comp['delta']*100:+.0f}%" or "—" if comp else "—"
+                if comp and comp["delta"] is not None:
+                    delta_cell = f"{comp['delta']*100:+.0f}%"
+                else:
+                    delta_cell = "—"
             else:
                 status_cell = "[green]PASS[/]"
                 delta_cell = "—"
@@ -883,6 +938,53 @@ def _write_trend_report(
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
+
+def _report_to_dict(r: FlakinessReport) -> dict:
+    """Serialize a FlakinessReport to a JSON-friendly dict."""
+    return {
+        "test_id": r.test_id,
+        "total_runs": r.total_runs,
+        "pass_count": r.pass_count,
+        "fail_count": r.fail_count,
+        "pass_rate": round(r.pass_rate, 6),
+        "flakiness_score": round(r.flakiness_score, 6),
+        "confidence_interval": [
+            round(r.confidence_interval[0], 6),
+            round(r.confidence_interval[1], 6),
+        ],
+        "is_flaky": r.is_flaky,
+        "severity": r.severity,
+        "root_cause": (
+            {
+                "category": r.root_cause.category,
+                "confidence": r.root_cause.confidence,
+                "evidence": list(r.root_cause.evidence),
+            }
+            if r.root_cause
+            else None
+        ),
+    }
+
+
+def _reports_to_json(
+    reports: list[FlakinessReport],
+    db_path: Path,
+    threshold: float,
+) -> dict:
+    """Build the JSON payload for `autopsy score --json`."""
+    flaky = [r for r in reports if r.is_flaky]
+    return {
+        "schema_version": 1,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "database": str(db_path),
+        "threshold": threshold,
+        "summary": {
+            "total_tests": len(reports),
+            "flaky_tests": len(flaky),
+        },
+        "tests": [_report_to_dict(r) for r in reports],
+    }
+
 
 def _print_scored_table(
     reports: list[FlakinessReport],

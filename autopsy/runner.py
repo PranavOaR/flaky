@@ -30,7 +30,6 @@ _OUTCOME_MAP: dict[str, str] = {
 def run_suite(
     suite_path: Path,
     num_runs: int,
-    workers: int,
     verbose: bool,
     conn: sqlite3.Connection,
     console: Console,

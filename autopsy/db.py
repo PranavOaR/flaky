@@ -14,6 +14,7 @@ def open_db(path: Path) -> sqlite3.Connection:
     _create_schema(conn)
     create_ai_fixes_table(conn)
     _migrate_session_id(conn)
+    _create_indexes(conn)
     return conn
 
 
@@ -45,6 +46,17 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             run_count   INTEGER NOT NULL,
             repo_path   TEXT
         );
+    """)
+    conn.commit()
+
+
+def _create_indexes(conn: sqlite3.Connection) -> None:
+    """Create performance indexes (must run after migrations add columns)."""
+    conn.executescript("""
+        CREATE INDEX IF NOT EXISTS idx_results_run_id  ON results(run_id);
+        CREATE INDEX IF NOT EXISTS idx_results_test_id ON results(test_id);
+        CREATE INDEX IF NOT EXISTS idx_runs_session_id ON runs(session_id);
+        CREATE INDEX IF NOT EXISTS idx_runs_run_index  ON runs(run_index);
     """)
     conn.commit()
 

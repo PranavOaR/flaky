@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "flaky-test-autopsy"
-version = "0.1.0"
+version = "0.2.0"
 description = "Detect flaky tests, classify root causes, get fix suggestions"
 readme = "README.md"
 license = {text = "MIT"}
@@ -38,6 +38,7 @@ dependencies = [
 dev = [
   "pytest>=7.0",
   "pytest-cov",
+  "pytest-mock",
   "build",
   "twine",
   "pyyaml",
@@ -46,6 +47,8 @@ dev = [
 [project.urls]
 Homepage = "https://github.com/PranavOaR/flaky"
 Repository = "https://github.com/PranavOaR/flaky"
+Documentation = "https://github.com/PranavOaR/flaky#readme"
+Changelog = "https://github.com/PranavOaR/flaky/blob/main/CHANGELOG.md"
 "Bug Tracker" = "https://github.com/PranavOaR/flaky/issues"
 
 [project.scripts]

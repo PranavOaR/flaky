@@ -1,5 +1,6 @@
 """Fix suggestion engine: template-based and AI-powered fixes."""
 
+import os
 import re
 import sqlite3
 from typing import Optional
@@ -9,7 +10,14 @@ import anthropic
 from autopsy.db import get_cached_ai_fix, save_ai_fix
 from autopsy.models import FlakinessReport, FixSuggestion, RootCause
 
+DEFAULT_AI_MODEL = "claude-opus-4-7"
+
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[mK]")
+
+
+def resolve_ai_model(explicit: Optional[str] = None) -> str:
+    """Pick the AI model: explicit arg > AUTOPSY_AI_MODEL env > default."""
+    return explicit or os.environ.get("AUTOPSY_AI_MODEL") or DEFAULT_AI_MODEL
 
 _TEMPLATE_FIXES: dict[str, tuple[str, Optional[str]]] = {
     "ordering": (
@@ -100,9 +108,10 @@ def get_ai_fix(
     test_id: str,
     root_cause: RootCause,
     failure_outputs: list[str],
-    model: str = "claude-opus-4-7",
+    model: Optional[str] = None,
 ) -> str:
     """Call the Anthropic API to generate an AI-powered fix suggestion."""
+    model = resolve_ai_model(model)
     client = anthropic.Anthropic()
 
     samples = "\n\n---\n\n".join(
@@ -134,9 +143,10 @@ def get_fix_suggestion(
     conn: Optional[sqlite3.Connection] = None,
     use_ai: bool = False,
     use_cache: bool = True,
-    model: str = "claude-opus-4-7",
+    model: Optional[str] = None,
 ) -> FixSuggestion:
     """Build a FixSuggestion for a flaky test, optionally with an AI-powered fix."""
+    model = resolve_ai_model(model)
     root_cause = report.root_cause or RootCause("unknown", "low", [])
     category = root_cause.category
 
