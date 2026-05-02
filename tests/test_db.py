@@ -1,6 +1,7 @@
 """Unit tests for the db.py query layer."""
 
 import sqlite3
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -15,8 +16,10 @@ from autopsy.db import (
     get_results_matrix,
     get_run_summary,
     get_session_for_run,
+    get_sessions_to_prune,
     insert_run,
     open_db,
+    prune_sessions,
     save_ai_fix,
 )
 from autopsy.models import RunRecord, TestResult
@@ -95,15 +98,17 @@ def test_get_all_test_ids():
 
 
 def test_clear_results():
-    """After clear_results both tables must be empty."""
+    """After clear_results runs, results, and sessions tables must be empty."""
     conn = _make_db()
-    insert_run(conn, _make_run(1, ["x::a", "x::b"], ["passed", "failed"]))
-    insert_run(conn, _make_run(2, ["x::a", "x::b"], ["passed", "passed"]))
+    create_session(conn, "s1", "2024-01-01T00:00:00+00:00", "label", 2, "/repo")
+    insert_run(conn, _make_run(1, ["x::a", "x::b"], ["passed", "failed"]), session_id="s1")
+    insert_run(conn, _make_run(2, ["x::a", "x::b"], ["passed", "passed"]), session_id="s1")
 
     clear_results(conn)
 
     assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM results").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
 
 
 def test_get_run_summary():
@@ -256,4 +261,60 @@ def test_session_migration(tmp_path):
     ).fetchone()
     assert sess is not None
 
+    conn.close()
+
+
+# ── pruning tests ──────────────────────────────────────────────────────────────
+
+def _ts(days_ago: int) -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
+
+
+def test_prune_by_keep(tmp_path):
+    """get_sessions_to_prune keeps only the N most recent sessions."""
+    conn = open_db(tmp_path / "prune.db")
+    for i in range(5):
+        create_session(conn, f"s{i}", _ts(10 - i), None, 1, "/r")
+
+    to_remove = get_sessions_to_prune(conn, keep=3)
+    assert len(to_remove) == 2
+    assert "s0" in to_remove
+    assert "s1" in to_remove
+    conn.close()
+
+
+def test_prune_by_age(tmp_path):
+    """get_sessions_to_prune removes sessions older than N days."""
+    conn = open_db(tmp_path / "prune_age.db")
+    create_session(conn, "old", _ts(30), None, 1, "/r")
+    create_session(conn, "new", _ts(1), None, 1, "/r")
+
+    to_remove = get_sessions_to_prune(conn, keep=100, older_than_days=7)
+    assert "old" in to_remove
+    assert "new" not in to_remove
+    conn.close()
+
+
+def test_prune_sessions_cascades(tmp_path):
+    """prune_sessions removes associated runs and results."""
+    conn = open_db(tmp_path / "cascade.db")
+    create_session(conn, "s1", _ts(20), None, 1, "/r")
+    insert_run(conn, _make_run(1, ["t::a"], ["passed"]), session_id="s1")
+
+    removed = prune_sessions(conn, ["s1"])
+
+    assert removed == 1
+    assert get_all_sessions(conn) == []
+    assert get_run_summary(conn)["total_runs"] == 0
+    assert get_run_summary(conn)["total_tests_seen"] == 0
+    conn.close()
+
+
+def test_prune_empty_list_is_noop(tmp_path):
+    """Pruning an empty list returns 0 and leaves data intact."""
+    conn = open_db(tmp_path / "noop.db")
+    create_session(conn, "s1", _ts(1), None, 1, "/r")
+
+    assert prune_sessions(conn, []) == 0
+    assert len(get_all_sessions(conn)) == 1
     conn.close()

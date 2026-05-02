@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html as _html_lib
 import json
 import sqlite3
 import webbrowser
@@ -298,6 +299,10 @@ const PALETTE = [
   '#ff7b72','#79c0ff','#56d364','#d2a8ff','#ffa657',
 ];
 
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
 let allTests   = [];
 let sortCol    = 4;
 let sortDir    = -1;
@@ -340,12 +345,12 @@ function renderTable(tests) {
     const flakePct   = (flakeV * 100).toFixed(1) + '%';
     const trendLabel = TREND_LABEL[trend] || trend;
     const raw        = t.test_id;
-    const short      = raw.length > 60 ? '…' + raw.slice(-59) : raw;
+    const short      = esc(raw.length > 60 ? '…' + raw.slice(-59) : raw);
 
     return `<tr>
-      <td class="td-test" title="${raw}">${short}</td>
-      <td><span class="sev-pill sev-${sev}">${sev}</span></td>
-      <td class="td-muted">${cause}</td>
+      <td class="td-test" title="${esc(raw)}">${short}</td>
+      <td><span class="sev-pill sev-${esc(sev)}">${esc(sev)}</span></td>
+      <td class="td-muted">${esc(cause)}</td>
       <td style="font-variant-numeric:tabular-nums">${passRate}</td>
       <td class="flake-cell">
         <div class="flake-pct" style="color:${barColor}">${flakePct}</div>
@@ -612,17 +617,25 @@ def _make_handler(db_path: str):
     class Handler(BaseHTTPRequestHandler):
         """Serve the dashboard HTML and /api/data endpoint."""
 
+        def _send_security_headers(self) -> None:
+            """Emit hardening headers on every response."""
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Referrer-Policy", "no-referrer")
+
         def do_GET(self) -> None:
             """Handle GET requests for / and /api/data."""
             if self.path == "/" or self.path == "":
+                safe_db_path = _html_lib.escape(db_path, quote=True)
                 html = _HTML.replace(
                     '<meta charset="UTF-8"/>',
-                    f'<meta charset="UTF-8"/>\n<meta name="db-path" content="{db_path}"/>',
+                    f'<meta charset="UTF-8"/>\n<meta name="db-path" content="{safe_db_path}"/>',
                 )
                 body = html.encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
+                self._send_security_headers()
                 self.end_headers()
                 self.wfile.write(body)
 
@@ -633,18 +646,20 @@ def _make_handler(db_path: str):
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(body)))
-                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self._send_security_headers()
                     self.end_headers()
                     self.wfile.write(body)
-                except Exception as exc:
-                    error = json.dumps({"error": str(exc)}).encode("utf-8")
+                except Exception:
+                    error = json.dumps({"error": "internal error"}).encode("utf-8")
                     self.send_response(500)
                     self.send_header("Content-Type", "application/json")
+                    self._send_security_headers()
                     self.end_headers()
                     self.wfile.write(error)
 
             else:
                 self.send_response(404)
+                self._send_security_headers()
                 self.end_headers()
 
         def log_message(self, fmt: str, *args: Any) -> None:  # noqa: ANN001

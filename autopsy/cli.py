@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -67,7 +68,19 @@ def main(ctx: click.Context) -> None:
 @click.option("--verbose", is_flag=True, default=False, help="Stream pytest output live.")
 @click.option("--fresh", is_flag=True, default=False, help="Clear existing DB data before running.")
 @click.option("--label", default=None, help="Human-readable label for this session.")
-def run_cmd(path: str, runs: int, verbose: bool, fresh: bool, label: "str | None") -> None:
+@click.option("--workers", default=1, show_default=True, type=int,
+              help="Number of parallel pytest workers.")
+@click.option("--filter", "filter_expr", default=None,
+              help="pytest -k expression to restrict which tests are run.")
+def run_cmd(
+    path: str,
+    runs: int,
+    verbose: bool,
+    fresh: bool,
+    label: "str | None",
+    workers: int,
+    filter_expr: "str | None",
+) -> None:
     """Run a pytest suite repeatedly, then score and classify flaky tests."""
     console = Console()
     suite_path = Path(path)
@@ -75,6 +88,10 @@ def run_cmd(path: str, runs: int, verbose: bool, fresh: bool, label: "str | None
     if not suite_path.exists():
         console.print(f"[bold red]Error:[/] path does not exist: {suite_path}")
         raise SystemExit(1)
+
+    if workers > 1 and verbose:
+        console.print("[yellow]--verbose is disabled when --workers > 1[/]")
+        verbose = False
 
     db_path = Path.cwd() / _DB_FILENAME
     conn = open_db(db_path)
@@ -94,6 +111,8 @@ def run_cmd(path: str, runs: int, verbose: bool, fresh: bool, label: "str | None
             conn=conn,
             console=console,
             session_id=session_id,
+            workers=workers,
+            filter_expr=filter_expr,
         )
         create_session(
             conn,
@@ -214,11 +233,6 @@ def fix_cmd(
             console.print(f"[bold]Database:[/] {path}\n")
             return
 
-        if use_ai:
-            console.print(
-                f"\n[dim]Generating AI fix suggestions for {len(flaky)} flaky test(s)…[/]"
-            )
-
         pairs: list[tuple[FlakinessReport, FixSuggestion]] = []
         for r in flaky:
             results = get_results_for_test(conn, r.test_id)
@@ -227,6 +241,12 @@ def fix_cmd(
                 for row in results
                 if row["status"] in ("failed", "error")
             ]
+
+            on_text = None
+            if use_ai and not output:
+                console.print(f"\n[dim]Generating AI fix for[/] [cyan]{r.test_id}[/][dim]…[/]")
+                on_text = lambda t: console.print(t, end="", markup=False)  # noqa: E731
+
             suggestion = get_fix_suggestion(
                 r,
                 failure_outputs,
@@ -234,13 +254,133 @@ def fix_cmd(
                 use_ai=use_ai,
                 use_cache=not no_cache,
                 model=model,
+                on_text=on_text,
             )
+            if on_text and suggestion.ai_fix:
+                console.print()  # newline after streamed output
             pairs.append((r, suggestion))
 
         if output:
             _write_fix_report(pairs, path, output, console)
         else:
             _print_fix_report(pairs, console, use_ai)
+    finally:
+        conn.close()
+
+
+# ── autopsy export ─────────────────────────────────────────────────────────────
+
+@main.command("export")
+@click.argument("db_path", type=click.Path(exists=False), default=_DB_FILENAME)
+@click.option("--format", "fmt", type=click.Choice(["csv", "json"]), default="csv",
+              show_default=True, help="Output format.")
+@click.option("--output", "-o", type=click.Path(), default=None,
+              help="Write to FILE instead of stdout.")
+@click.option("--min-runs", default=1, show_default=True, help="Skip tests with fewer than N runs.")
+@click.option("--threshold", default=0.0, show_default=True, type=float,
+              help="Only export tests with flakiness score above this threshold.")
+def export_cmd(
+    db_path: str,
+    fmt: str,
+    output: "str | None",
+    min_runs: int,
+    threshold: float,
+) -> None:
+    """Export scored test results to CSV or JSON."""
+    import csv
+    import io
+
+    console = Console()
+    path = Path(db_path)
+
+    if not path.exists():
+        console.print(f"[bold red]Error:[/] database not found: {path}")
+        raise SystemExit(1)
+
+    conn = open_db(path)
+    try:
+        reports = score_from_conn(conn, min_runs=min_runs, flaky_threshold=threshold)
+    finally:
+        conn.close()
+
+    filtered = [r for r in reports if r.flakiness_score >= threshold]
+
+    if fmt == "json":
+        payload = _reports_to_json(filtered, db_path=path, threshold=threshold)
+        text = json.dumps(payload, indent=2)
+    else:
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow([
+            "test_id", "total_runs", "pass_count", "fail_count",
+            "pass_rate", "flakiness_score", "is_flaky", "severity", "root_cause",
+        ])
+        for r in filtered:
+            writer.writerow([
+                _csv_safe(r.test_id), r.total_runs, r.pass_count, r.fail_count,
+                f"{r.pass_rate:.6f}", f"{r.flakiness_score:.6f}",
+                r.is_flaky, r.severity,
+                _csv_safe(r.root_cause.category if r.root_cause else "unknown"),
+            ])
+        text = buf.getvalue()
+
+    if output:
+        Path(output).write_text(text, encoding="utf-8")
+        console.print(f"[green]Exported {len(filtered)} test(s) to:[/] {output}\n")
+    else:
+        click.echo(text, nl=False)
+
+
+# ── autopsy clean ──────────────────────────────────────────────────────────────
+
+@main.command("clean")
+@click.argument("db_path", type=click.Path(exists=False), default=_DB_FILENAME)
+@click.option("--keep", default=10, show_default=True, type=int,
+              help="Number of most-recent sessions to keep.")
+@click.option("--older-than", "older_than", default=None, type=int,
+              help="Remove sessions older than N days.")
+@click.option("--dry-run", "dry_run", is_flag=True, default=False,
+              help="Show what would be removed without deleting.")
+def clean_cmd(
+    db_path: str,
+    keep: int,
+    older_than: "int | None",
+    dry_run: bool,
+) -> None:
+    """Remove old sessions from a results DB to control disk usage."""
+    from autopsy.db import get_sessions_to_prune, prune_sessions
+
+    console = Console()
+    path = Path(db_path)
+
+    if not path.exists():
+        console.print(f"[bold red]Error:[/] database not found: {path}")
+        raise SystemExit(1)
+
+    conn = open_db(path)
+    try:
+        sessions_to_remove = get_sessions_to_prune(conn, keep=keep, older_than_days=older_than)
+
+        if not sessions_to_remove:
+            console.print("[green]Nothing to clean.[/]")
+            return
+
+        all_sessions = get_all_sessions(conn)
+        meta = {s["id"]: s for s in all_sessions}
+
+        console.print(f"\n[bold]{len(sessions_to_remove)}[/] session(s) to remove:\n")
+        for sid in sessions_to_remove:
+            s = meta.get(sid, {})
+            label = s.get("label") or "—"
+            date = (s.get("started_at") or "")[:19].replace("T", " ")
+            console.print(f"  [dim]{sid[:16]}…[/]  {label}  {date}")
+
+        if dry_run:
+            console.print("\n[dim](dry run — nothing deleted)[/]\n")
+            return
+
+        removed = prune_sessions(conn, sessions_to_remove)
+        console.print(f"\n[green]Removed {removed} session(s).[/]\n")
     finally:
         conn.close()
 
@@ -640,10 +780,10 @@ def _write_ci_report(
         "## Flaky Test Autopsy Report\n",
         "| | |",
         "|---|---|",
-        f"| **Repo** | `{path}` |",
+        f"| **Repo** | {_md_id(path)} |",
         f"| **Runs** | {runs} |",
-        f"| **Session** | `{label_str}` |",
-        f"| **Baseline** | `{baseline_str}` |",
+        f"| **Session** | {_md_id(label_str)} |",
+        f"| **Baseline** | {_md_id(baseline_str)} |",
         f"| **Duration** | {duration_s:.1f}s |",
         "",
         "### Results\n",
@@ -673,7 +813,7 @@ def _write_ci_report(
             delta_cell = "—"
 
         lines.append(
-            f"| {status_icon} | `{r.test_id}` | {r.flakiness_score*100:.0f}% | {cause_str} | {delta_cell} |"
+            f"| {status_icon} | {_md_id(r.test_id)} | {r.flakiness_score*100:.0f}% | {cause_str} | {delta_cell} |"
         )
 
     # Fix suggestions section
@@ -683,7 +823,7 @@ def _write_ci_report(
             conf = r.root_cause.confidence if r.root_cause else "low"
             lines += [
                 f"<details>",
-                f"<summary>🔴 {s.test_id} — {s.root_cause_category} ({conf} confidence)</summary>",
+                f"<summary>🔴 {s.test_id.replace('<', '&lt;').replace('>', '&gt;')} — {s.root_cause_category} ({conf} confidence)</summary>",
                 "",
                 f"**Fix:** {s.template_fix}",
             ]
@@ -766,6 +906,10 @@ jobs:
               help="Cron expression for scheduled runs.")
 def init_ci_cmd(runs: int, schedule: str) -> None:
     """Generate .github/workflows/flaky-tests.yml for CI integration."""
+    if not re.fullmatch(r"[\d\s*/,\-]+", schedule):
+        print(f"Error: invalid cron expression: {schedule!r}", file=sys.stderr)
+        raise SystemExit(1)
+
     workflow_dir = Path.cwd() / ".github" / "workflows"
     workflow_dir.mkdir(parents=True, exist_ok=True)
     workflow_path = workflow_dir / "flaky-tests.yml"
@@ -919,7 +1063,7 @@ def _write_trend_report(
     """Write a Markdown trend report to disk."""
     lines: list[str] = [
         "# Flaky Test Trend Report\n",
-        f"Database: {db_path}",
+        f"Database: {_md_id(str(db_path))}",
         f"Sessions: {len(sessions)}\n",
         "---\n",
         "| Test | Trend | Latest | Delta | History |",
@@ -932,12 +1076,32 @@ def _write_trend_report(
         else:
             sign = "+" if r.trend_delta >= 0 else ""
             delta = f"{sign}{r.trend_delta * 100:.1f}%"
-        lines.append(f"| `{r.test_id}` | {r.trend} | {latest} | {delta} | {r.sparkline} |")
+        lines.append(f"| {_md_id(r.test_id)} | {r.trend} | {latest} | {delta} | {r.sparkline} |")
 
     Path(output_path).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
+
+def _md_id(s: str) -> str:
+    """Wrap a test ID as a safe Markdown inline code span."""
+    return "`" + s.replace("`", "'").replace("|", "\\|") + "`"
+
+
+_CSV_FORMULA_TRIGGERS = frozenset("=+-@\t\r")
+
+
+def _csv_safe(value: object) -> object:
+    """Prefix string values that start with formula trigger characters.
+
+    Prevents spreadsheet formula injection (CSV injection) when the exported
+    file is opened in Excel, Google Sheets, or similar tools.
+    """
+    s = str(value)
+    if s and s[0] in _CSV_FORMULA_TRIGGERS:
+        return "'" + s
+    return value
+
 
 def _report_to_dict(r: FlakinessReport) -> dict:
     """Serialize a FlakinessReport to a JSON-friendly dict."""
@@ -1120,7 +1284,7 @@ def _write_fix_report(
     lines: list[str] = [
         "# Flaky Test Fix Report\n",
         f"Generated: {datetime.now(timezone.utc).isoformat()}",
-        f"Database: {db_path}",
+        f"Database: {_md_id(str(db_path))}",
         f"Flaky tests analyzed: {len(pairs)}\n",
         "---\n",
     ]
@@ -1128,7 +1292,7 @@ def _write_fix_report(
     for r, s in pairs:
         conf = f" ({r.root_cause.confidence} confidence)" if r.root_cause else ""
         lines += [
-            f"## `{s.test_id}`\n",
+            f"## {_md_id(s.test_id)}\n",
             f"**Severity:** {r.severity.upper()} | "
             f"**Root cause:** {s.root_cause_category}{conf}\n",
         ]
@@ -1153,7 +1317,7 @@ def _write_fix_report(
 
         lines.append("---\n")
 
-    Path(output_path).write_text("\n".join(lines), encoding="utf-8")
+    Path(output_path).write_text("\n".join(lines) + "\n", encoding="utf-8")
     console.print(f"\n[green]Report written to:[/] {output_path}\n")
 
 

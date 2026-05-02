@@ -1,7 +1,7 @@
 """SQLite interface for storing test run results."""
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from autopsy.models import RunRecord
@@ -178,8 +178,8 @@ def create_session(
 
 
 def clear_results(conn: sqlite3.Connection) -> None:
-    """Delete all rows from runs and results tables."""
-    conn.executescript("DELETE FROM results; DELETE FROM runs;")
+    """Delete all rows from results, runs, and sessions tables."""
+    conn.executescript("DELETE FROM results; DELETE FROM runs; DELETE FROM sessions;")
     conn.commit()
 
 
@@ -341,3 +341,41 @@ def get_db_info(conn: sqlite3.Connection) -> str:
         f"First: {s['first_run_at'] or 'n/a'} | "
         f"Last: {s['last_run_at'] or 'n/a'}"
     )
+
+
+# ── pruning ────────────────────────────────────────────────────────────────────
+
+def get_sessions_to_prune(
+    conn: sqlite3.Connection,
+    keep: int = 10,
+    older_than_days: "int | None" = None,
+) -> list[str]:
+    """Return session IDs that should be removed based on age or count limits."""
+    sessions = get_all_sessions(conn)  # ordered ASC by started_at
+    to_remove: set[str] = set()
+
+    if older_than_days is not None:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).isoformat()
+        to_remove.update(s["id"] for s in sessions if (s["started_at"] or "") < cutoff)
+
+    remaining = [s for s in sessions if s["id"] not in to_remove]
+    if len(remaining) > keep:
+        to_remove.update(s["id"] for s in remaining[:-keep])
+
+    return list(to_remove)
+
+
+def prune_sessions(conn: sqlite3.Connection, session_ids: list[str]) -> int:
+    """Delete sessions and all their associated runs/results. Returns count removed."""
+    if not session_ids:
+        return 0
+    placeholders = ",".join("?" * len(session_ids))
+    conn.execute(
+        f"DELETE FROM results WHERE run_id IN "
+        f"(SELECT id FROM runs WHERE session_id IN ({placeholders}))",
+        session_ids,
+    )
+    conn.execute(f"DELETE FROM runs WHERE session_id IN ({placeholders})", session_ids)
+    conn.execute(f"DELETE FROM sessions WHERE id IN ({placeholders})", session_ids)
+    conn.commit()
+    return len(session_ids)
