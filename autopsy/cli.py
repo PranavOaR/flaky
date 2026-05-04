@@ -1229,6 +1229,39 @@ def init_ci_cmd(runs: int, schedule: str) -> None:
     print("4. From the second run onwards, regressions will be detected")
 
 
+# ── autopsy report ────────────────────────────────────────────────────────────
+
+@main.command("report")
+@click.argument("db_path", type=click.Path(exists=False), default=_DB_FILENAME)
+@click.option("--output", "-o", default="autopsy_report.html", show_default=True,
+              help="Output HTML file path.")
+@click.option("--open", "open_browser", is_flag=True, default=False,
+              help="Open the report in the browser after generating.")
+def report_cmd(db_path: str, output: str, open_browser: bool) -> None:
+    """Generate a self-contained HTML report (no server required)."""
+    import webbrowser
+
+    from autopsy.dashboard import build_static_report
+
+    path = Path(db_path)
+    if not path.exists():
+        Console().print(f"[bold red]Error:[/] database not found: {path}")
+        raise SystemExit(1)
+
+    console = Console(highlight=False)
+    console.print(f"[bold cyan]autopsy report[/] generating from [bold]{path}[/]…")
+
+    html = build_static_report(str(path))
+    out = Path(output)
+    out.write_text(html, encoding="utf-8")
+
+    size_kb = out.stat().st_size // 1024
+    console.print(f"[green]Report written to:[/] {out}  ({size_kb} KB)")
+
+    if open_browser:
+        webbrowser.open(out.resolve().as_uri())
+
+
 # ── autopsy watch ─────────────────────────────────────────────────────────────
 
 @main.command("watch")

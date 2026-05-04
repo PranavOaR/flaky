@@ -1,27 +1,30 @@
 # Changelog
 
-## [Unreleased]
+## [0.4.0] — 2026-05-04
 
 ### Added
 
+- `autopsy report` — generate a fully self-contained single-file HTML report (no server, works offline); embeds all test data and detail panels via `window.__STATIC_DATA__` / `window.__STATIC_TESTS__`; supports `--output FILE` and `--open`
 - `autopsy watch <test_id> <path>` — re-run a single test up to `--max-runs` times (default 50) until it fails; prints a per-run status line, captures the failure output, and exits 1 with a ready-to-paste repro command including the exact random seed
-- Dashboard drill-down panel — clicking any test row opens a 500px slide-in panel with severity pill, flakiness stats, run timeline (coloured dots), latest failure output, and a template fix suggestion; backed by a new `/api/test?id=<test_id>` endpoint and `_build_test_detail()` helper; ESC or overlay click closes it
 - `autopsy ignore <test_id>` — add a test to the ignore list; suppresses it from CI exit codes, fix suggestions, and scored tables. Supports `--reason TEXT`, `--remove`, `--list`, and `--db PATH`
 - `autopsy history <test_id>` — show the full per-run outcome table for a single test, with session labels, duration, and failure snippets. Supports `--last N` and `--failures-only`
-- `is_ignored` field on `FlakinessReport`; `_apply_ignore_list()` helper in `cli.py` propagates the ignore state through `score`, `fix`, and `ci` commands
-- `ignored_tests` SQLite table (created automatically by `open_db`); DB functions: `get_ignored_tests`, `get_ignored_tests_detail`, `add_ignored_test`, `remove_ignored_test`
-- `get_history_for_test` DB query — joins sessions for per-run session labels
-- 26 new tests across `test_ignore.py` and `test_history.py`
-
+- Dashboard drill-down panel — clicking any test row opens a 500px slide-in panel with severity pill, flakiness stats, run timeline (coloured dots), latest failure output, and a template fix suggestion; ESC or overlay click closes it
+- Dashboard: "Ignore this test" button in drill-down panel — POSTs to `/api/ignore` endpoint, persists to the ignore list without a page reload
+- Root cause classifiers: **fixture** (detects setup/teardown errors) and **resource** (detects memory, disk, and file-handle exhaustion); both have fix templates in the fixer
+- PyPI publish workflow (`.github/workflows/release.yml`) — triggers on `v*` tags; builds sdist + wheel, publishes via Trusted Publishing (no API token needed), creates a GitHub Release with artifacts
 - `[tool.autopsy]` config section in `pyproject.toml` — set `runs`, `workers`, `threshold`, `min_runs`, and `model` once per repo; all subcommands pick them up as defaults via Click's `default_map`
-- `ruff` and `mypy` added to `[dev]` extras; config in `pyproject.toml` under `[tool.ruff]` and `[tool.mypy]`
-- `tomli>=2.0; python_version < "3.11"` runtime dependency — enables TOML config on Python 3.10
-- GitHub Actions CI workflow (`.github/workflows/ci.yml`): lint + type-check job (ruff, mypy on 3.12) and test matrix (3.10, 3.11, 3.12) with coverage report upload
+- GitHub Actions CI workflow (`.github/workflows/ci.yml`): lint + type-check job and test matrix (3.10, 3.11, 3.12) with coverage report upload
+- `is_ignored` field on `FlakinessReport`; `_apply_ignore_list()` helper in `cli.py` propagates the ignore state through `score`, `fix`, and `ci` commands
+- `get_history_for_test` DB query — joins sessions for per-run session labels
+- 32 new tests across `test_ignore.py`, `test_history.py`, and `test_watch.py`
 
 ### Changed
 
-- Modernised type annotations across `autopsy/` from `Optional[X]` / `Callable` to `X | None` / `collections.abc.Callable` (Python 3.10+ syntax)
-- All 20 ruff auto-fixable issues resolved; codebase is now `ruff check` clean
+- `_PRIORITY` updated: network > fixture > timing > resource > ordering > randomness > unknown
+- Dashboard cause chart now colours fixture (purple) and resource (orange) slices
+- Dashboard auto-refresh disabled in static report mode; ignore button hidden in static mode
+- Modernised type annotations across `autopsy/` from `Optional[X]` to `X | None` (Python 3.10+ syntax)
+- `ruff` and `mypy` added to `[dev]` extras; codebase is now fully lint-clean
 
 ## [0.3.0] — 2026-05-02
 

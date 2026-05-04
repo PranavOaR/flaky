@@ -79,6 +79,43 @@ def test_example():
     responses.add(responses.GET, "https://api.example.com/", json={}, status=200)
 """,
     ),
+    "fixture": (
+        "This test has a fixture setup or teardown error — the test environment isn't being "
+        "properly initialized or cleaned up. Fix by ensuring fixtures yield cleanly and handle "
+        "exceptions in teardown.",
+        """\
+import pytest
+
+@pytest.fixture(autouse=True)
+def safe_teardown():
+    yield
+    # Cleanup runs even if the test fails — wrap risky teardown in try/except:
+    try:
+        pass  # your cleanup here
+    except Exception:
+        pass
+""",
+    ),
+    "resource": (
+        "This test fails due to resource exhaustion (memory, file handles, disk space). Fix by "
+        "explicitly closing resources, using context managers, and avoiding large in-memory "
+        "allocations in tests.",
+        """\
+import pytest
+
+@pytest.fixture(autouse=True)
+def cleanup_resources(tmp_path):
+    # Use tmp_path — pytest cleans it up automatically
+    # Close file handles explicitly
+    handles = []
+    yield handles
+    for h in handles:
+        try:
+            h.close()
+        except Exception:
+            pass
+""",
+    ),
     "unknown": (
         "No clear flakiness pattern detected. Investigate shared mutable state, external "
         "I/O, non-deterministic data structures, and environment-specific behavior. "

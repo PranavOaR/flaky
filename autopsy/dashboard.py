@@ -419,6 +419,7 @@ let causeChart = null;
 const DB_PATH = document.querySelector('meta[name="db-path"]')?.content || '';
 
 async function fetchData() {
+  if (window.__STATIC_DATA__) return window.__STATIC_DATA__;
   const r = await fetch('/api/data');
   return r.json();
 }
@@ -475,8 +476,13 @@ async function showDetail(testId) {
   document.getElementById('detail-panel').classList.add('open');
 
   try {
-    const r = await fetch('/api/test?id=' + encodeURIComponent(testId));
-    const data = await r.json();
+    let data;
+    if (window.__STATIC_TESTS__) {
+      data = window.__STATIC_TESTS__[testId] || { error: 'not found' };
+    } else {
+      const r = await fetch('/api/test?id=' + encodeURIComponent(testId));
+      data = await r.json();
+    }
     if (data.error) throw new Error(data.error);
     renderDetail(data);
   } catch (e) {
@@ -509,6 +515,12 @@ function renderDetail(d) {
     ? `<div class="dp-section"><div class="dp-label">Latest Failure</div><div class="dp-failure">${esc(d.latest_failure)}</div></div>`
     : '';
 
+  const ignoreHtml = window.__STATIC_DATA__ ? '' :
+    `<button id="dp-ignore-btn" onclick="ignoreTest(${JSON.stringify(d.test_id)})"
+       style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);cursor:pointer;font-size:11px;padding:4px 10px;margin-top:4px">
+       Ignore this test
+     </button>`;
+
   document.getElementById('dp-body').innerHTML = `
     <div class="dp-stats">
       <div class="dp-stat">
@@ -528,7 +540,8 @@ function renderDetail(d) {
         <div class="dp-stat-lbl">Runs</div>
       </div>
     </div>
-    <div class="dp-section">
+    ${ignoreHtml}
+    <div class="dp-section" style="margin-top:16px">
       <div class="dp-label">Run Timeline (green=pass, red=fail)</div>
       <div class="dp-timeline">${timeline || '<span style="color:var(--muted);font-size:12px">No history</span>'}</div>
     </div>
@@ -632,7 +645,7 @@ function renderCauseChart(tests) {
   const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
   const labels  = entries.map(e => e[0]);
   const values  = entries.map(e => e[1]);
-  const CAUSE_COLOR = { ordering: '#e3b341', timing: '#58a6ff', randomness: '#3fb950', network: '#f85149', unknown: '#7d8590' };
+  const CAUSE_COLOR = { ordering: '#e3b341', timing: '#58a6ff', randomness: '#3fb950', network: '#f85149', fixture: '#bc8cff', resource: '#ffa657', unknown: '#7d8590' };
   const colors  = labels.map(l => CAUSE_COLOR[l] || '#7d8590');
 
   const ctx = document.getElementById('cause-chart').getContext('2d');
@@ -696,8 +709,25 @@ async function refresh() {
   renderCauseChart(allTests);
 }
 
+async function ignoreTest(testId) {
+  const btn = document.getElementById('dp-ignore-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Ignoring…'; }
+  try {
+    const r = await fetch('/api/ignore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ test_id: testId }),
+    });
+    if (!r.ok) throw new Error('Request failed');
+    if (btn) { btn.textContent = 'Ignored ✓'; btn.style.color = 'var(--clean)'; }
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Ignore'; }
+    alert('Could not ignore test: ' + e.message);
+  }
+}
+
 refresh();
-setInterval(refresh, 30000);
+if (!window.__STATIC_DATA__) setInterval(refresh, 30000);
 </script>
 </body>
 </html>
@@ -938,11 +968,80 @@ def _make_handler(db_path: str) -> type[BaseHTTPRequestHandler]:
                 self._send_security_headers()
                 self.end_headers()
 
+        def do_POST(self) -> None:
+            """Handle POST /api/ignore to add a test to the ignore list."""
+            from urllib.parse import urlparse
+            if urlparse(self.path).path != "/api/ignore":
+                self.send_response(404)
+                self._send_security_headers()
+                self.end_headers()
+                return
+
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                body = json.loads(self.rfile.read(length))
+                test_id = str(body.get("test_id", "")).strip()
+                reason = str(body.get("reason", "")).strip() or None
+            except (json.JSONDecodeError, ValueError):
+                self.send_response(400)
+                self._send_security_headers()
+                self.end_headers()
+                return
+
+            if not test_id:
+                self.send_response(400)
+                self._send_security_headers()
+                self.end_headers()
+                return
+
+            try:
+                from autopsy.db import add_ignored_test, open_db
+                conn = open_db(Path(db_path))
+                add_ignored_test(conn, test_id, reason=reason)
+                conn.close()
+                resp = json.dumps({"ok": True}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self._send_security_headers()
+                self.end_headers()
+                self.wfile.write(resp)
+            except Exception:
+                err = json.dumps({"error": "internal error"}).encode("utf-8")
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self._send_security_headers()
+                self.end_headers()
+                self.wfile.write(err)
+
         def log_message(self, fmt: str, *args: Any) -> None:  # noqa: ANN001
             """Suppress default access log noise."""
             pass
 
     return Handler
+
+
+# ── static report builder ─────────────────────────────────────────────────────
+
+def build_static_report(db_path: str) -> str:
+    """Return a self-contained HTML report with all data baked in."""
+    data = _build_api_data(db_path)
+
+    # Pre-bake every test's detail so the report works offline
+    tests_detail: dict[str, Any] = {}
+    for t in data.get("tests", []):
+        try:
+            tests_detail[t["test_id"]] = _build_test_detail(db_path, t["test_id"])
+        except Exception:  # noqa: BLE001
+            pass
+
+    injected = (
+        "<script>\n"
+        f"window.__STATIC_DATA__ = {json.dumps(data, default=str)};\n"
+        f"window.__STATIC_TESTS__ = {json.dumps(tests_detail, default=str)};\n"
+        "</script>"
+    )
+    return _HTML.replace("</head>", injected + "\n</head>", 1)
 
 
 # ── public API ─────────────────────────────────────────────────────────────────

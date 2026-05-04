@@ -26,9 +26,19 @@ _RANDOMNESS_KEYWORDS = (
     "random", "uuid", "seed", "shuffle", "sample",
     "randint", "choice", "hash", "pythonhashseed",
 )
+_FIXTURE_KEYWORDS = (
+    "fixture", "teardown", "finalizer", "setup error",
+    "error in setup", "error during teardown", "error at teardown",
+    "fixtureerror", "yield_fixture",
+)
+_RESOURCE_KEYWORDS = (
+    "memoryerror", "out of memory", "too many open files",
+    "no space left", "disk full", "oserror", "ioerror",
+    "permissionerror", "filenotfounderror",
+)
 
 # Priority order — lower number = higher priority (more actionable)
-_PRIORITY = {"network": 1, "timing": 2, "ordering": 3, "randomness": 4, "unknown": 5}
+_PRIORITY = {"network": 1, "fixture": 2, "timing": 3, "resource": 4, "ordering": 5, "randomness": 6, "unknown": 7}
 
 # Outcomes considered "real" data (skipped/missing/xfail are excluded)
 _REAL_OUTCOMES = ("passed", "failed", "error")
@@ -92,6 +102,27 @@ def _classify_network(failures: list[dict]) -> RootCause | None:
     confidence = "high" if len(found) >= 2 else "medium"
     evidence = [f"failure output contains network keyword '{kw}'" for kw in found[:5]]
     return RootCause(category="network", confidence=confidence, evidence=evidence)
+
+
+def _classify_fixture(failures: list[dict]) -> RootCause | None:
+    """Detect fixture setup/teardown errors via keyword scan."""
+    text = "\n".join((f.get("stdout") or "") for f in failures)
+    found = _find_keywords(text, _FIXTURE_KEYWORDS)
+    if not found:
+        return None
+    confidence = "high" if len(found) >= 2 else "medium"
+    evidence = [f"failure output indicates fixture issue: '{kw}'" for kw in found[:5]]
+    return RootCause(category="fixture", confidence=confidence, evidence=evidence)
+
+
+def _classify_resource(failures: list[dict]) -> RootCause | None:
+    """Detect resource exhaustion errors (memory, disk, file handles)."""
+    text = "\n".join((f.get("stdout") or "") for f in failures)
+    found = _find_keywords(text, _RESOURCE_KEYWORDS)
+    if not found:
+        return None
+    evidence = [f"failure output indicates resource issue: '{kw}'" for kw in found[:5]]
+    return RootCause(category="resource", confidence="high", evidence=evidence)
 
 
 def _classify_timing(passes: list[dict], failures: list[dict]) -> RootCause | None:
@@ -207,7 +238,9 @@ def classify_root_cause(
     candidates: list[RootCause] = []
     for cause in (
         _classify_network(failures),
+        _classify_fixture(failures),
         _classify_timing(passes, failures),
+        _classify_resource(failures),
         _classify_ordering(matrix_row),
         _classify_randomness(matrix_row, failures),
     ):
