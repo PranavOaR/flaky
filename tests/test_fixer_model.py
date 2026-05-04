@@ -2,12 +2,12 @@
 
 from unittest.mock import patch
 
+from autopsy.db import open_db
 from autopsy.fixer import (
     DEFAULT_AI_MODEL,
     get_fix_suggestion,
     resolve_ai_model,
 )
-from autopsy.db import open_db
 from autopsy.models import FlakinessReport, RootCause
 
 

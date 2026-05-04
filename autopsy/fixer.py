@@ -3,23 +3,23 @@
 import os
 import re
 import sqlite3
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import anthropic
 
 from autopsy.db import get_cached_ai_fix, save_ai_fix
-from autopsy.models import FlakinessReport, FixSuggestion, RootCause
+from autopsy.models import FixSuggestion, FlakinessReport, RootCause
 
 DEFAULT_AI_MODEL = "claude-opus-4-7"
 
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[mK]")
 
 
-def resolve_ai_model(explicit: Optional[str] = None) -> str:
+def resolve_ai_model(explicit: str | None = None) -> str:
     """Pick the AI model: explicit arg > AUTOPSY_AI_MODEL env > default."""
     return explicit or os.environ.get("AUTOPSY_AI_MODEL") or DEFAULT_AI_MODEL
 
-_TEMPLATE_FIXES: dict[str, tuple[str, Optional[str]]] = {
+_TEMPLATE_FIXES: dict[str, tuple[str, str | None]] = {
     "ordering": (
         "This test has an ordering dependency — its outcome depends on execution order "
         "relative to other tests. Fix by resetting all shared mutable state in an "
@@ -101,7 +101,7 @@ def strip_ansi(text: str) -> str:
     return _ANSI_ESCAPE.sub("", text)
 
 
-def get_template_fix(root_cause: RootCause) -> tuple[str, Optional[str]]:
+def get_template_fix(root_cause: RootCause) -> tuple[str, str | None]:
     """Return (fix_description, code_snippet_or_None) for the given root cause."""
     return _TEMPLATE_FIXES.get(root_cause.category, _TEMPLATE_FIXES["unknown"])
 
@@ -110,8 +110,8 @@ def get_ai_fix(
     test_id: str,
     root_cause: RootCause,
     failure_outputs: list[str],
-    model: Optional[str] = None,
-    on_text: Optional[Callable[[str], None]] = None,
+    model: str | None = None,
+    on_text: Callable[[str], None] | None = None,
 ) -> str:
     """Call the Anthropic API to generate an AI-powered fix suggestion.
 
@@ -150,11 +150,11 @@ def get_ai_fix(
 def get_fix_suggestion(
     report: FlakinessReport,
     failure_outputs: list[str],
-    conn: Optional[sqlite3.Connection] = None,
+    conn: sqlite3.Connection | None = None,
     use_ai: bool = False,
     use_cache: bool = True,
-    model: Optional[str] = None,
-    on_text: Optional[Callable[[str], None]] = None,
+    model: str | None = None,
+    on_text: Callable[[str], None] | None = None,
 ) -> FixSuggestion:
     """Build a FixSuggestion for a flaky test, optionally with an AI-powered fix."""
     model = resolve_ai_model(model)
@@ -163,7 +163,7 @@ def get_fix_suggestion(
 
     template_fix, code_snippet = get_template_fix(root_cause)
 
-    ai_fix: Optional[str] = None
+    ai_fix: str | None = None
     from_cache = False
     source = "template"
 

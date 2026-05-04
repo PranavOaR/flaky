@@ -2,12 +2,9 @@
 
 from unittest.mock import patch
 
-import pytest
-
 from autopsy.db import get_cached_ai_fix, open_db, save_ai_fix
 from autopsy.fixer import get_fix_suggestion, get_template_fix, strip_ansi
 from autopsy.models import FlakinessReport, RootCause
-
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 

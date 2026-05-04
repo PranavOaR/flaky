@@ -1,16 +1,12 @@
 """Unit tests for Day 9 CI integration — autopsy ci / init-ci commands."""
 
-import os
-import sqlite3
 from pathlib import Path
 
-import pytest
 import yaml
 from click.testing import CliRunner
 
-from autopsy.cli import ci_cmd, init_ci_cmd, main
+from autopsy.cli import ci_cmd, init_ci_cmd
 from autopsy.trends import compare_to_baseline
-
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -19,7 +15,7 @@ SAMPLE_SUITE = Path(__file__).parent / "fixtures" / "sample_suite"
 
 def _make_populated_db(tmp_path: Path, session_id: str = "sess-1") -> Path:
     """Create a minimal populated DB at tmp_path/autopsy_results.db."""
-    from autopsy.db import open_db, insert_run, create_session
+    from autopsy.db import create_session, insert_run, open_db
     from autopsy.models import RunRecord, TestResult
 
     db_path = tmp_path / "autopsy_results.db"
@@ -147,7 +143,7 @@ def test_ci_exit_code_regression(tmp_path):
     baseline_db = tmp_path / "baseline" / "autopsy_results.db"
     baseline_db.parent.mkdir(parents=True)
 
-    from autopsy.db import open_db, insert_run, create_session
+    from autopsy.db import create_session, insert_run, open_db
     from autopsy.models import RunRecord, TestResult
 
     b_conn = open_db(baseline_db)

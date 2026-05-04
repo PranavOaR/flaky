@@ -1,5 +1,26 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- `autopsy ignore <test_id>` — add a test to the ignore list; suppresses it from CI exit codes, fix suggestions, and scored tables. Supports `--reason TEXT`, `--remove`, `--list`, and `--db PATH`
+- `autopsy history <test_id>` — show the full per-run outcome table for a single test, with session labels, duration, and failure snippets. Supports `--last N` and `--failures-only`
+- `is_ignored` field on `FlakinessReport`; `_apply_ignore_list()` helper in `cli.py` propagates the ignore state through `score`, `fix`, and `ci` commands
+- `ignored_tests` SQLite table (created automatically by `open_db`); DB functions: `get_ignored_tests`, `get_ignored_tests_detail`, `add_ignored_test`, `remove_ignored_test`
+- `get_history_for_test` DB query — joins sessions for per-run session labels
+- 26 new tests across `test_ignore.py` and `test_history.py`
+
+- `[tool.autopsy]` config section in `pyproject.toml` — set `runs`, `workers`, `threshold`, `min_runs`, and `model` once per repo; all subcommands pick them up as defaults via Click's `default_map`
+- `ruff` and `mypy` added to `[dev]` extras; config in `pyproject.toml` under `[tool.ruff]` and `[tool.mypy]`
+- `tomli>=2.0; python_version < "3.11"` runtime dependency — enables TOML config on Python 3.10
+- GitHub Actions CI workflow (`.github/workflows/ci.yml`): lint + type-check job (ruff, mypy on 3.12) and test matrix (3.10, 3.11, 3.12) with coverage report upload
+
+### Changed
+
+- Modernised type annotations across `autopsy/` from `Optional[X]` / `Callable` to `X | None` / `collections.abc.Callable` (Python 3.10+ syntax)
+- All 20 ruff auto-fixable issues resolved; codebase is now `ruff check` clean
+
 ## [0.3.0] — 2026-05-02
 
 ### Added

@@ -15,7 +15,6 @@ from autopsy.scorer import (
     wilson_lower_bound,
 )
 
-
 # ── Wilson math ────────────────────────────────────────────────────────────────
 
 def test_wilson_perfect():

@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import sqlite3
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -17,20 +18,96 @@ from rich.table import Table
 from autopsy import __version__
 from autopsy.banner import print_banner
 from autopsy.db import (
+    add_ignored_test,
     clear_results,
     create_session,
     get_all_sessions,
     get_db_info,
+    get_history_for_test,
+    get_ignored_tests,
+    get_ignored_tests_detail,
     get_results_for_test,
     get_run_detail,
     get_run_summary,
     open_db,
+    remove_ignored_test,
 )
-from autopsy.models import FlakinessReport, FixSuggestion
+from autopsy.models import FixSuggestion, FlakinessReport
 from autopsy.runner import run_suite
 from autopsy.scorer import _REAL_OUTCOMES, filter_flaky, score_from_conn
 
 _DB_FILENAME = "autopsy_results.db"
+
+
+# ── config file ────────────────────────────────────────────────────────────────
+
+def _find_pyproject() -> "Path | None":
+    """Walk up from cwd looking for a pyproject.toml."""
+    current = Path.cwd()
+    for directory in [current, *current.parents]:
+        candidate = directory / "pyproject.toml"
+        if candidate.is_file():
+            return candidate
+        if (directory / ".git").exists():
+            break
+    return None
+
+
+def _load_config() -> dict:
+    """Read [tool.autopsy] from the nearest pyproject.toml and build a Click default_map.
+
+    Returns an empty dict if no config is found or the TOML library is unavailable.
+    """
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        try:
+            import tomli as tomllib  # noqa: PLC0415
+        except ModuleNotFoundError:
+            return {}
+
+    toml_path = _find_pyproject()
+    if toml_path is None:
+        return {}
+
+    try:
+        data = tomllib.loads(toml_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+    cfg: dict = data.get("tool", {}).get("autopsy", {})
+    if not cfg:
+        return {}
+
+    # Map flat config keys → per-subcommand Click default_map structure.
+    # Only keys that correspond to actual CLI options are forwarded.
+    subcommand_map: dict[str, dict] = {}
+
+    def _set(cmd: str, opt: str, value: object) -> None:
+        subcommand_map.setdefault(cmd, {})[opt] = value
+
+    if "runs" in cfg:
+        _set("run", "runs", cfg["runs"])
+        _set("ci", "runs", cfg["runs"])
+
+    if "workers" in cfg:
+        _set("run", "workers", cfg["workers"])
+
+    if "threshold" in cfg:
+        for cmd in ("score", "fix", "export"):
+            _set(cmd, "threshold", cfg["threshold"])
+        _set("ci", "regression_threshold", cfg["threshold"])
+        _set("trend", "threshold", cfg["threshold"])
+
+    if "min_runs" in cfg:
+        for cmd in ("score", "fix", "ci", "export"):
+            _set(cmd, "min_runs", cfg["min_runs"])
+        _set("trend", "min_sessions", cfg["min_runs"])
+
+    if "model" in cfg:
+        _set("fix", "model", cfg["model"])
+
+    return subcommand_map
 
 _SEVERITY_STYLES = {
     "critical": "bold red",
@@ -49,7 +126,19 @@ _CAUSE_STYLES = {
 }
 
 
-@click.group(invoke_without_command=True)
+def _apply_ignore_list(
+    reports: list[FlakinessReport],
+    ignored: set[str],
+) -> list[FlakinessReport]:
+    """Mark ignored tests in-place: sets is_ignored=True and is_flaky=False."""
+    for r in reports:
+        if r.test_id in ignored:
+            r.is_ignored = True
+            r.is_flaky = False
+    return reports
+
+
+@click.group(invoke_without_command=True, context_settings={"default_map": _load_config()})
 @click.version_option(__version__, "-V", "--version", prog_name="autopsy")
 @click.pass_context
 def main(ctx: click.Context) -> None:
@@ -160,6 +249,7 @@ def score_cmd(
     conn = open_db(path)
     try:
         reports = score_from_conn(conn, min_runs=min_runs, flaky_threshold=threshold)
+        _apply_ignore_list(reports, get_ignored_tests(conn))
         if as_json:
             payload = _reports_to_json(reports, db_path=path, threshold=threshold)
             click.echo(json.dumps(payload, indent=2))
@@ -226,6 +316,7 @@ def fix_cmd(
     conn = open_db(path)
     try:
         reports = score_from_conn(conn, min_runs=min_runs, flaky_threshold=threshold)
+        _apply_ignore_list(reports, get_ignored_tests(conn))
         flaky = filter_flaky(reports)
 
         if not flaky:
@@ -385,6 +476,210 @@ def clean_cmd(
         conn.close()
 
 
+# ── autopsy ignore ─────────────────────────────────────────────────────────────
+
+@main.command("ignore")
+@click.argument("test_id", required=False, default=None)
+@click.option("--db", "db_path", type=click.Path(exists=False), default=_DB_FILENAME,
+              show_default=True, help="Path to the results database.")
+@click.option("--reason", default=None, help="Note explaining why this test is ignored.")
+@click.option("--remove", "do_remove", is_flag=True, default=False,
+              help="Remove test_id from the ignore list instead of adding it.")
+@click.option("--list", "do_list", is_flag=True, default=False,
+              help="Show all currently ignored tests.")
+def ignore_cmd(
+    test_id: "str | None",
+    db_path: str,
+    reason: "str | None",
+    do_remove: bool,
+    do_list: bool,
+) -> None:
+    """Manage the ignore list — suppress known-flaky tests from CI exit codes."""
+    console = Console()
+    path = Path(db_path)
+
+    if not path.exists():
+        console.print(f"[bold red]Error:[/] database not found: {path}")
+        raise SystemExit(1)
+
+    conn = open_db(path)
+    try:
+        if do_list:
+            rows = get_ignored_tests_detail(conn)
+            if not rows:
+                console.print("\n[dim]No tests on the ignore list.[/]\n")
+                return
+            table = Table(show_header=True, header_style="bold magenta")
+            table.add_column("Test ID", style="cyan", no_wrap=False, min_width=40)
+            table.add_column("Reason", style="dim")
+            table.add_column("Ignored at", justify="left", style="dim")
+            for row in rows:
+                table.add_row(
+                    row["test_id"],
+                    row["reason"] or "—",
+                    (row["ignored_at"] or "")[:19].replace("T", " "),
+                )
+            console.print()
+            console.print(table)
+            console.print(f"\n[dim]{len(rows)} test(s) ignored.[/]\n")
+
+        elif do_remove:
+            if not test_id:
+                console.print("[bold red]Error:[/] provide a test_id to remove.")
+                raise SystemExit(1)
+            removed = remove_ignored_test(conn, test_id)
+            if removed:
+                console.print(f"\n[green]Removed[/] [cyan]{test_id}[/] from ignore list.\n")
+            else:
+                console.print(f"\n[yellow]{test_id}[/] was not on the ignore list.\n")
+
+        else:
+            if not test_id:
+                console.print("[bold red]Error:[/] provide a test_id to ignore.")
+                raise SystemExit(1)
+            add_ignored_test(conn, test_id, reason=reason)
+            reason_note = f"  [dim]({reason})[/]" if reason else ""
+            console.print(f"\n[green]Ignoring[/] [cyan]{test_id}[/]{reason_note}\n")
+            console.print(
+                "[dim]This test will be excluded from CI exit codes and fix suggestions. "
+                "Use [bold]autopsy ignore --list[/dim][dim] to see all ignored tests.[/]\n"
+            )
+    finally:
+        conn.close()
+
+
+# ── autopsy history ────────────────────────────────────────────────────────────
+
+_STATUS_STYLE = {
+    "passed":  "green",
+    "failed":  "bold red",
+    "error":   "bold red",
+    "skipped": "dim",
+    "missing": "dim",
+}
+
+_STATUS_ICON = {
+    "passed":  "✓",
+    "failed":  "✗",
+    "error":   "✗",
+    "skipped": "–",
+    "missing": "·",
+}
+
+
+@main.command("history")
+@click.argument("test_id")
+@click.argument("db_path", type=click.Path(exists=False), default=_DB_FILENAME)
+@click.option("--last", "last_n", default=None, type=int,
+              help="Show only the N most recent runs.")
+@click.option("--failures-only", "failures_only", is_flag=True, default=False,
+              help="Show only failing runs.")
+def history_cmd(
+    test_id: str,
+    db_path: str,
+    last_n: "int | None",
+    failures_only: bool,
+) -> None:
+    """Show the full run-by-run history for a single test."""
+    console = Console()
+    path = Path(db_path)
+
+    if not path.exists():
+        console.print(f"[bold red]Error:[/] database not found: {path}")
+        raise SystemExit(1)
+
+    conn = open_db(path)
+    try:
+        rows = get_history_for_test(conn, test_id)
+
+        if not rows:
+            console.print(f"\n[yellow]No results found for[/] [cyan]{test_id}[/]")
+            console.print("[dim]Run `autopsy run` first, or check the test ID with `autopsy score`.[/]\n")
+            raise SystemExit(1)
+
+        # Load flakiness score for the summary line
+        reports = score_from_conn(conn, min_runs=1, flaky_threshold=0.05)
+        report = next((r for r in reports if r.test_id == test_id), None)
+
+        ignored = get_ignored_tests(conn)
+        is_ignored = test_id in ignored
+    finally:
+        conn.close()
+
+    # Filter before slicing
+    display_rows = rows
+    if failures_only:
+        display_rows = [r for r in rows if r["status"] in ("failed", "error")]
+
+    if last_n is not None:
+        display_rows = display_rows[-last_n:]
+
+    # ── header ────────────────────────────────────────────────────────────────
+    real = [r for r in rows if r["status"] in ("passed", "failed", "error")]
+    total = len(real)
+    failures = sum(1 for r in real if r["status"] in ("failed", "error"))
+    fail_pct = (failures / total * 100) if total else 0.0
+
+    console.print(Rule(f"[bold cyan]{test_id}[/]", style="cyan"))
+
+    summary_parts = [
+        f"[bold]{total}[/] runs",
+        f"[bold red]{failures}[/] failure(s) ({fail_pct:.1f}%)",
+    ]
+    if report:
+        sev_style = _SEVERITY_STYLES.get(report.severity, "")
+        sev_cell = f"[{sev_style}]{report.severity.upper()}[/]" if sev_style else report.severity.upper()
+        summary_parts.append(f"flakiness {report.flakiness_score*100:.1f}% · {sev_cell}")
+    if is_ignored:
+        summary_parts.append("[dim](ignored)[/]")
+
+    console.print("  " + "   ·   ".join(summary_parts))
+    console.print()
+
+    if not display_rows:
+        console.print("[dim]  No runs match the current filter.[/]\n")
+        return
+
+    # ── table ─────────────────────────────────────────────────────────────────
+    table = Table(show_header=True, header_style="bold magenta", box=None, padding=(0, 1))
+    table.add_column("Run", justify="right", style="dim", width=5)
+    table.add_column("Seed", justify="right", style="dim", width=12)
+    table.add_column("Session", width=18)
+    table.add_column("Status", justify="center", width=8)
+    table.add_column("Duration", justify="right", width=9)
+    table.add_column("Failure output", no_wrap=True)
+
+    for row in display_rows:
+        status = row["status"]
+        style = _STATUS_STYLE.get(status, "")
+        icon = _STATUS_ICON.get(status, status)
+        status_cell = f"[{style}]{icon} {status}[/]" if style else f"{icon} {status}"
+
+        label = row.get("session_label") or (row.get("session_id") or "")[:8]
+        seed_str = str(row["seed"]) if row.get("seed") is not None else "—"
+        dur_str = f"{row['duration_s']:.2f}s" if row.get("duration_s") is not None else "—"
+
+        # First non-empty line of failure output, capped at 72 chars
+        stdout: str = row.get("stdout") or ""
+        first_line = next((ln.strip() for ln in stdout.splitlines() if ln.strip()), "")
+        snippet = (first_line[:72] + "…") if len(first_line) > 72 else first_line
+
+        table.add_row(
+            str(row["run_index"]),
+            seed_str,
+            label,
+            status_cell,
+            dur_str,
+            f"[dim]{snippet}[/]" if snippet else "",
+        )
+
+    console.print(table)
+
+    if last_n and len(rows) > last_n:
+        console.print(f"\n[dim]Showing last {last_n} of {len(rows)} run(s). Omit --last to see all.[/]")
+    console.print()
+
+
 # ── autopsy ci ────────────────────────────────────────────────────────────────
 
 def _detect_ci_env() -> dict:
@@ -499,13 +794,14 @@ def ci_cmd(
     )
 
     reports = score_from_conn(conn, min_runs=min_runs, flaky_threshold=0.05)
+    _apply_ignore_list(reports, get_ignored_tests(conn))
 
-    # Build current flakiness score map
+    # Build current flakiness score map (ignored tests have is_flaky=False, score unchanged)
     current_scores: dict[str, float] = {r.test_id: r.flakiness_score for r in reports}
 
     # Load baseline scores if requested
-    baseline_scores: "dict[str, float] | None" = None
-    baseline_label: "str | None" = None
+    baseline_scores: dict[str, float] | None = None
+    baseline_label: str | None = None
     if baseline_db:
         baseline_path = Path(baseline_db)
         if baseline_path.exists():
@@ -548,18 +844,22 @@ def ci_cmd(
     # Run comparison
     comparisons: list[dict] = []
     regressions: list[dict] = []
+    ignored_ids = {r.test_id for r in reports if r.is_ignored}
     if baseline_scores is not None:
         from autopsy.trends import compare_to_baseline
         comparisons = compare_to_baseline(current_scores, baseline_scores, regression_threshold)
-        regressions = [c for c in comparisons if c["status"] == "regression"]
+        regressions = [
+            c for c in comparisons
+            if c["status"] == "regression" and c["test_id"] not in ignored_ids
+        ]
 
     conn.close()
 
     # Build fix suggestions for regressions if --output is set and not --no-ai
-    fix_pairs: "list[tuple[FlakinessReport, FixSuggestion]] | None" = None
+    fix_pairs: list[tuple[FlakinessReport, FixSuggestion]] | None = None
     if output and not no_ai:
-        from autopsy.fixer import get_fix_suggestion
         from autopsy.db import get_results_for_test as _get_results
+        from autopsy.fixer import get_fix_suggestion
         try:
             conn2 = open_db(db_path)
             flaky = filter_flaky(reports)
@@ -822,7 +1122,7 @@ def _write_ci_report(
         for r, s in fix_pairs:
             conf = r.root_cause.confidence if r.root_cause else "low"
             lines += [
-                f"<details>",
+                "<details>",
                 f"<summary>🔴 {s.test_id.replace('<', '&lt;').replace('>', '&gt;')} — {s.root_cause_category} ({conf} confidence)</summary>",
                 "",
                 f"**Fix:** {s.template_fix}",
@@ -1117,6 +1417,7 @@ def _report_to_dict(r: FlakinessReport) -> dict:
             round(r.confidence_interval[1], 6),
         ],
         "is_flaky": r.is_flaky,
+        "is_ignored": r.is_ignored,
         "severity": r.severity,
         "root_cause": (
             {
@@ -1163,9 +1464,13 @@ def _print_scored_table(
         return
 
     flaky_reports = filter_flaky(reports)
+    ignored_reports = [r for r in reports if r.is_ignored]
     rows = flaky_reports if only_flaky else (
-        flaky_reports + [r for r in reports if not r.is_flaky]
+        flaky_reports + [r for r in reports if not r.is_flaky and not r.is_ignored]
     )
+    # Append ignored at the bottom when showing all
+    if not only_flaky:
+        rows = rows + ignored_reports
 
     if not rows:
         console.print("\n[green]No flaky tests detected.[/]")
@@ -1184,8 +1489,9 @@ def _print_scored_table(
         sev_style = _SEVERITY_STYLES.get(r.severity, "")
         cause_text = r.root_cause.category if r.root_cause else "—"
         cause_style = _CAUSE_STYLES.get(cause_text, "")
+        test_cell = f"[dim]{r.test_id} (ignored)[/]" if r.is_ignored else r.test_id
         table.add_row(
-            r.test_id,
+            test_cell,
             str(r.total_runs),
             f"{r.pass_rate*100:.1f}%",
             f"{r.flakiness_score*100:.1f}%",
@@ -1195,9 +1501,11 @@ def _print_scored_table(
 
     console.print()
     console.print(table)
+    ignored_count = len(ignored_reports)
+    ignored_note = f"  [dim]({ignored_count} ignored)[/]" if ignored_count else ""
     console.print(
         f"\n[bold]{len(flaky_reports)}[/] flaky test(s) detected out of "
-        f"[bold]{len(reports)}[/] total (95% confidence)"
+        f"[bold]{len(reports)}[/] total (95% confidence){ignored_note}"
     )
     console.print(f"[bold]Database:[/] {db_path}\n")
 
@@ -1321,9 +1629,8 @@ def _write_fix_report(
     console.print(f"\n[green]Report written to:[/] {output_path}\n")
 
 
-def _print_info(conn, db_path: Path, console: Console) -> None:
+def _print_info(conn: sqlite3.Connection, db_path: Path, console: Console) -> None:
     """Print the info summary for the `autopsy info` subcommand."""
-    from autopsy.scorer import filter_flaky, score_from_conn
     from autopsy.db import get_results_by_session
 
     summary = get_run_summary(conn)

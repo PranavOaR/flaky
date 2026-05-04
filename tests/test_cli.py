@@ -6,10 +6,9 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from autopsy import __version__
-from autopsy.cli import main, score_cmd
+from autopsy.cli import _load_config, main, score_cmd
 from autopsy.db import insert_run, open_db
 from autopsy.models import RunRecord, TestResult
-
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -97,3 +96,72 @@ def test_score_json_missing_db(tmp_path):
     assert result.exit_code == 1
     payload = json.loads(result.output)
     assert "error" in payload
+
+
+# ── _load_config ───────────────────────────────────────────────────────────────
+
+def test_load_config_empty_when_no_pyproject(tmp_path, monkeypatch):
+    """Returns empty dict when no pyproject.toml is found."""
+    monkeypatch.chdir(tmp_path)
+    assert _load_config() == {}
+
+
+def test_load_config_empty_when_no_tool_autopsy(tmp_path, monkeypatch):
+    """Returns empty dict when pyproject.toml has no [tool.autopsy] section."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'dummy'\n", encoding="utf-8")
+    assert _load_config() == {}
+
+
+def test_load_config_maps_runs(tmp_path, monkeypatch):
+    """runs key maps to the 'run' and 'ci' subcommands."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.autopsy]\nruns = 25\n", encoding="utf-8"
+    )
+    cfg = _load_config()
+    assert cfg.get("run", {}).get("runs") == 25
+    assert cfg.get("ci", {}).get("runs") == 25
+
+
+def test_load_config_maps_all_keys(tmp_path, monkeypatch):
+    """All supported config keys produce the correct default_map entries."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.autopsy]\n"
+        "runs = 20\n"
+        "workers = 4\n"
+        "threshold = 0.08\n"
+        "min_runs = 3\n"
+        'model = "claude-sonnet-4-6"\n',
+        encoding="utf-8",
+    )
+    cfg = _load_config()
+
+    assert cfg["run"]["runs"] == 20
+    assert cfg["run"]["workers"] == 4
+    assert cfg["ci"]["runs"] == 20
+
+    assert cfg["score"]["threshold"] == 0.08
+    assert cfg["ci"]["regression_threshold"] == 0.08
+
+    assert cfg["score"]["min_runs"] == 3
+    assert cfg["fix"]["min_runs"] == 3
+
+    assert cfg["fix"]["model"] == "claude-sonnet-4-6"
+
+
+def test_load_config_stops_at_git_boundary(tmp_path, monkeypatch):
+    """Config search does not walk above a .git directory."""
+    # pyproject.toml above .git — should not be found
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.autopsy]\nruns = 99\n", encoding="utf-8"
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    sub = repo / "sub"
+    sub.mkdir()
+    monkeypatch.chdir(sub)
+
+    assert _load_config() == {}

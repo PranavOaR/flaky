@@ -32,6 +32,7 @@ dependencies = [
   "pytest-json-report>=1.5",
   "anthropic>=0.25",
   "pyfiglet>=0.8",
+  "tomli>=2.0; python_version < '3.11'",
 ]
 
 [project.optional-dependencies]
@@ -39,6 +40,8 @@ dev = [
   "pytest>=7.0",
   "pytest-cov",
   "pytest-mock",
+  "ruff>=0.4",
+  "mypy>=1.10",
   "build",
   "twine",
   "pyyaml",
@@ -56,3 +59,49 @@ autopsy = "autopsy.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["autopsy"]
+
+# ── ruff ──────────────────────────────────────────────────────────────────────
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = [
+  "E501",   # line too long — enforced by formatter, not linter
+  "B008",   # function calls in default arg — used intentionally by Click
+  "B904",   # raise-without-from-inside-except — too noisy for now
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B"]   # allow assert patterns and other test idioms
+
+# ── mypy ──────────────────────────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+disallow_untyped_defs = true
+warn_unused_ignores = true
+warn_return_any = false     # anthropic SDK returns Any in places
+
+# ── pytest ────────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--ignore=tests/fixtures"
+
+# ── coverage ──────────────────────────────────────────────────────────────────
+[tool.coverage.run]
+source = ["autopsy"]
+omit = ["autopsy/banner.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+
+# ── example autopsy config (users put this in their own pyproject.toml) ───────
+# [tool.autopsy]
+# runs = 20
+# workers = 4
+# threshold = 0.05
+# min_runs = 3
+# model = "claude-opus-4-7"

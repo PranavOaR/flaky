@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import html as _html_lib
 import json
-import sqlite3
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -530,7 +529,7 @@ setInterval(refresh, 30000);
 def _build_api_data(db_path: str) -> dict[str, Any]:
     """Query the SQLite DB and return the dashboard JSON payload."""
     from autopsy.db import get_all_sessions, get_results_by_session, open_db
-    from autopsy.scorer import score_from_conn, filter_flaky
+    from autopsy.scorer import score_from_conn
     from autopsy.trends import compute_trends
 
     path = Path(db_path)
@@ -611,7 +610,7 @@ def _build_api_data(db_path: str) -> dict[str, Any]:
 
 # ── HTTP handler ───────────────────────────────────────────────────────────────
 
-def _make_handler(db_path: str):
+def _make_handler(db_path: str) -> type[BaseHTTPRequestHandler]:
     """Return a BaseHTTPRequestHandler class bound to `db_path`."""
 
     class Handler(BaseHTTPRequestHandler):

@@ -1,5 +1,4 @@
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 @dataclass
@@ -37,7 +36,8 @@ class FlakinessReport:
     confidence_interval: tuple[float, float]  # (lower, upper) on failure rate
     is_flaky: bool
     severity: str                             # 'none' | 'low' | 'medium' | 'high' | 'critical'
-    root_cause: Optional[RootCause] = None
+    root_cause: RootCause | None = None
+    is_ignored: bool = False                  # suppressed from CI exit codes and fix output
 
 
 @dataclass
@@ -45,7 +45,7 @@ class FixSuggestion:
     test_id: str
     root_cause_category: str
     template_fix: str             # always present
-    code_snippet: Optional[str]   # python code block to display, if applicable
-    ai_fix: Optional[str]         # only when --ai flag was used and API succeeded
+    code_snippet: str | None   # python code block to display, if applicable
+    ai_fix: str | None         # only when --ai flag was used and API succeeded
     source: str                   # 'template' | 'ai' | 'template+ai'
     from_cache: bool              # True when ai_fix was retrieved from the DB cache

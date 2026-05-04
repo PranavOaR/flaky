@@ -1,16 +1,12 @@
 """Tests for autopsy/runner.py — JSON report parsing and run logic."""
 
 import json
-import sqlite3
-import tempfile
 from pathlib import Path
 
 import pytest
 from rich.console import Console
 
-from autopsy.db import _create_schema, get_run_summary
 from autopsy.runner import _OUTCOME_MAP, _parse_json_report
-
 
 # ── fixtures ───────────────────────────────────────────────────────────────────
 

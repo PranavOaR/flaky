@@ -3,8 +3,6 @@
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-import pytest
-
 from autopsy.db import (
     clear_results,
     create_session,
@@ -12,10 +10,8 @@ from autopsy.db import (
     get_all_test_ids,
     get_cached_ai_fix,
     get_results_by_session,
-    get_results_for_test,
     get_results_matrix,
     get_run_summary,
-    get_session_for_run,
     get_sessions_to_prune,
     insert_run,
     open_db,
@@ -23,7 +19,6 @@ from autopsy.db import (
     save_ai_fix,
 )
 from autopsy.models import RunRecord, TestResult
-
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 

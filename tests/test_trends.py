@@ -2,17 +2,13 @@
 
 import sqlite3
 
-import pytest
-
 from autopsy.trends import (
     SessionScore,
     TrendReport,
     _classify_trend,
-    compute_trends,
     get_regressions,
     make_sparkline,
 )
-
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 

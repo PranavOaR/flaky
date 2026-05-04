@@ -4,7 +4,6 @@ import math
 import sqlite3
 from pathlib import Path
 from statistics import mean
-from typing import Optional
 
 from autopsy.db import get_results_for_test, get_results_matrix, open_db
 from autopsy.models import FlakinessReport, RootCause
@@ -84,7 +83,7 @@ def _find_keywords(text: str, keywords: tuple[str, ...]) -> list[str]:
     return sorted({kw for kw in keywords if kw in lower})
 
 
-def _classify_network(failures: list[dict]) -> Optional[RootCause]:
+def _classify_network(failures: list[dict]) -> RootCause | None:
     """Detect network-related failures via keyword scan of failure output."""
     text = "\n".join((f.get("stdout") or "") for f in failures)
     found = _find_keywords(text, _NETWORK_KEYWORDS)
@@ -95,7 +94,7 @@ def _classify_network(failures: list[dict]) -> Optional[RootCause]:
     return RootCause(category="network", confidence=confidence, evidence=evidence)
 
 
-def _classify_timing(passes: list[dict], failures: list[dict]) -> Optional[RootCause]:
+def _classify_timing(passes: list[dict], failures: list[dict]) -> RootCause | None:
     """Detect timing/race issues via duration delta and keyword scan."""
     if not failures:
         return None
@@ -132,7 +131,7 @@ def _classify_timing(passes: list[dict], failures: list[dict]) -> Optional[RootC
     return RootCause(category="timing", confidence=confidence, evidence=evidence)
 
 
-def _classify_ordering(matrix_row: list[str]) -> Optional[RootCause]:
+def _classify_ordering(matrix_row: list[str]) -> RootCause | None:
     """Detect ordering dependency via half-vs-half pass-rate gap."""
     relevant = [s for s in matrix_row if s in _REAL_OUTCOMES]
     n = len(relevant)
@@ -162,7 +161,7 @@ def _classify_ordering(matrix_row: list[str]) -> Optional[RootCause]:
 def _classify_randomness(
     matrix_row: list[str],
     failures: list[dict],
-) -> Optional[RootCause]:
+) -> RootCause | None:
     """Detect randomness via keyword scan + uniform failure distribution."""
     fail_text = "\n".join((f.get("stdout") or "") for f in failures)
     keywords = _find_keywords(fail_text, _RANDOMNESS_KEYWORDS)
@@ -245,7 +244,7 @@ def _score_one(
     severity = compute_severity(flakiness_score)
     is_flaky = flakiness_score >= flaky_threshold
 
-    root_cause: Optional[RootCause] = None
+    root_cause: RootCause | None = None
     if is_flaky:
         root_cause = classify_root_cause(statuses, results)
 

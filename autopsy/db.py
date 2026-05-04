@@ -13,6 +13,7 @@ def open_db(path: Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     _create_schema(conn)
     create_ai_fixes_table(conn)
+    create_ignored_tests_table(conn)
     _migrate_session_id(conn)
     _create_indexes(conn)
     return conn
@@ -91,6 +92,18 @@ def _migrate_session_id(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def create_ignored_tests_table(conn: sqlite3.Connection) -> None:
+    """Create the ignored_tests table if it doesn't exist."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS ignored_tests (
+            test_id     TEXT PRIMARY KEY,
+            reason      TEXT,
+            ignored_at  TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+
+
 def create_ai_fixes_table(conn: sqlite3.Connection) -> None:
     """Create the AI fix response cache table if it doesn't exist."""
     conn.execute("""
@@ -146,7 +159,7 @@ def insert_run(
         "INSERT INTO runs (run_index, seed, started_at, duration_s, session_id) VALUES (?,?,?,?,?)",
         (record.run_index, record.seed, record.started_at, record.duration_s, session_id),
     )
-    run_id = cur.lastrowid
+    run_id: int = cur.lastrowid  # type: ignore[assignment]
     conn.executemany(
         "INSERT INTO results (run_id, test_id, status, duration_s, stdout) VALUES (?,?,?,?,?)",
         [
@@ -216,6 +229,26 @@ def get_results_for_test(conn: sqlite3.Connection, test_id: str) -> list[dict]:
         SELECT ru.run_index, ru.seed, re.status, re.duration_s, re.stdout
         FROM results re
         JOIN runs ru ON ru.id = re.run_id
+        WHERE re.test_id = ?
+        ORDER BY ru.run_index ASC
+    """, (test_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_history_for_test(conn: sqlite3.Connection, test_id: str) -> list[dict]:
+    """Return per-run rows for history display, including session label."""
+    rows = conn.execute("""
+        SELECT
+            ru.run_index,
+            ru.seed,
+            ru.session_id,
+            s.label   AS session_label,
+            re.status,
+            re.duration_s,
+            re.stdout
+        FROM results re
+        JOIN runs ru ON ru.id = re.run_id
+        LEFT JOIN sessions s ON s.id = ru.session_id
         WHERE re.test_id = ?
         ORDER BY ru.run_index ASC
     """, (test_id,)).fetchall()
@@ -363,6 +396,45 @@ def get_sessions_to_prune(
         to_remove.update(s["id"] for s in remaining[:-keep])
 
     return list(to_remove)
+
+
+# ── ignore list ───────────────────────────────────────────────────────────────
+
+def get_ignored_tests(conn: sqlite3.Connection) -> set[str]:
+    """Return the set of currently ignored test IDs."""
+    rows = conn.execute("SELECT test_id FROM ignored_tests").fetchall()
+    return {r["test_id"] for r in rows}
+
+
+def get_ignored_tests_detail(conn: sqlite3.Connection) -> list[dict]:
+    """Return all ignored test rows with reason and timestamp."""
+    rows = conn.execute(
+        "SELECT test_id, reason, ignored_at FROM ignored_tests ORDER BY ignored_at ASC"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def add_ignored_test(
+    conn: sqlite3.Connection,
+    test_id: str,
+    reason: "str | None" = None,
+) -> None:
+    """Add a test to the ignore list (upserts if already present)."""
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO ignored_tests (test_id, reason, ignored_at)
+        VALUES (?, ?, ?)
+        """,
+        (test_id, reason, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+
+
+def remove_ignored_test(conn: sqlite3.Connection, test_id: str) -> bool:
+    """Remove a test from the ignore list. Returns True if it was present."""
+    cur = conn.execute("DELETE FROM ignored_tests WHERE test_id = ?", (test_id,))
+    conn.commit()
+    return cur.rowcount > 0
 
 
 def prune_sessions(conn: sqlite3.Connection, session_ids: list[str]) -> int:
