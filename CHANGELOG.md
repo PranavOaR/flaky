@@ -4,6 +4,8 @@
 
 ### Added
 
+- `autopsy watch <test_id> <path>` — re-run a single test up to `--max-runs` times (default 50) until it fails; prints a per-run status line, captures the failure output, and exits 1 with a ready-to-paste repro command including the exact random seed
+- Dashboard drill-down panel — clicking any test row opens a 500px slide-in panel with severity pill, flakiness stats, run timeline (coloured dots), latest failure output, and a template fix suggestion; backed by a new `/api/test?id=<test_id>` endpoint and `_build_test_detail()` helper; ESC or overlay click closes it
 - `autopsy ignore <test_id>` — add a test to the ignore list; suppresses it from CI exit codes, fix suggestions, and scored tables. Supports `--reason TEXT`, `--remove`, `--list`, and `--db PATH`
 - `autopsy history <test_id>` — show the full per-run outcome table for a single test, with session labels, duration, and failure snippets. Supports `--last N` and `--failures-only`
 - `is_ignored` field on `FlakinessReport`; `_apply_ignore_list()` helper in `cli.py` propagates the ignore state through `score`, `fix`, and `ci` commands

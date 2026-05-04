@@ -2,9 +2,12 @@
 
 import json
 import os
+import random
 import re
 import sqlite3
+import subprocess
 import sys
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1224,6 +1227,104 @@ def init_ci_cmd(runs: int, schedule: str) -> None:
     print("2. Set ANTHROPIC_API_KEY in your GitHub repo secrets (optional)")
     print("3. On first run, no baseline exists — autopsy ci will create one")
     print("4. From the second run onwards, regressions will be detected")
+
+
+# ── autopsy watch ─────────────────────────────────────────────────────────────
+
+@main.command("watch")
+@click.argument("test_id")
+@click.argument("path", type=click.Path(exists=True))
+@click.option("--max-runs", "max_runs", default=50, show_default=True, type=int,
+              help="Maximum number of runs before giving up.")
+@click.option("--timeout", default=60, show_default=True, type=int,
+              help="Per-run pytest timeout in seconds.")
+@click.option("--verbose", is_flag=True, default=False,
+              help="Show full failure output.")
+def watch_cmd(test_id: str, path: str, max_runs: int, timeout: int, verbose: bool) -> None:
+    """Re-run a single test repeatedly until it fails (reproducing a flake)."""
+    from autopsy.runner import _parse_json_report
+
+    console = Console(highlight=False)
+    console.print(f"\n[bold cyan]autopsy watch[/] — targeting [bold]{test_id}[/]")
+    console.print(f"Path: {path}   max-runs: {max_runs}   timeout: {timeout}s\n")
+
+    for run_num in range(1, max_runs + 1):
+        seed = random.randint(0, 2**31 - 1)
+
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tf:
+            report_path = Path(tf.name)
+
+        try:
+            cmd = [
+                sys.executable, "-m", "pytest",
+                str(path),
+                "-k", test_id,
+                "--tb=short",
+                "--no-header",
+                "-p", "no:cacheprovider",
+                f"--randomly-seed={seed}",
+                "--json-report",
+                f"--json-report-file={report_path}",
+                "-q",
+            ]
+            try:
+                subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+            except subprocess.TimeoutExpired:
+                console.print(f"[yellow]Run {run_num}/{max_runs}  seed {seed}  ⚠ timed out[/]")
+                report_path.unlink(missing_ok=True)
+                continue
+            except Exception as exc:
+                console.print(f"[yellow]Run {run_num}/{max_runs}  seed {seed}  ⚠ error: {exc}[/]")
+                report_path.unlink(missing_ok=True)
+                continue
+
+            results = _parse_json_report(report_path, run_num, console, quiet=True)
+        finally:
+            report_path.unlink(missing_ok=True)
+
+        # Find results for our target test (nodeid may contain the test_id as substring)
+        target_results = [r for r in results if test_id in r.test_id or r.test_id == test_id]
+
+        if not target_results:
+            console.print(f"[dim]Run {run_num}/{max_runs}  seed {seed}  — test not collected[/]")
+            continue
+
+        for result in target_results:
+            duration = f"{result.duration_s:.2f}s"
+            if result.status in ("failed", "error"):
+                console.print(
+                    f"Run {run_num}/{max_runs}  seed {seed}  "
+                    f"[bold red]✗ {result.status}[/]   {duration}"
+                )
+                console.print()
+                console.print(Rule("[bold red]Failure Output[/]", style="red"))
+                if result.stdout:
+                    snippet = result.stdout if verbose else result.stdout[:2000]
+                    console.print(Syntax(snippet, "python", theme="monokai", word_wrap=True))
+                console.print(Rule(style="red"))
+                console.print()
+                console.print(
+                    f"[bold green]Reproduced in {run_num} run(s).[/]  "
+                    f"Seed: [bold]{seed}[/]"
+                )
+                console.print(
+                    f"\n[dim]Repro command:[/]\n"
+                    f"  pytest {path} -k {result.test_id!r} --randomly-seed={seed} --tb=short"
+                )
+                raise SystemExit(1)
+            else:
+                console.print(
+                    f"Run {run_num}/{max_runs}  seed {seed}  "
+                    f"[green]✓ {result.status}[/]   {duration}"
+                )
+
+    console.print(f"\n[green]Not reproduced after {max_runs} run(s).[/]")
+    raise SystemExit(0)
 
 
 # ── autopsy dashboard ─────────────────────────────────────────────────────────

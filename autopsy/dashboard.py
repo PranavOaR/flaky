@@ -218,9 +218,117 @@ _HTML = """\
   .trend-gone         { font-size: 12px; color: var(--muted); }
 
   .empty-state { padding: 40px; text-align: center; color: var(--muted); font-size: 13px; }
+
+  /* ---- detail panel ---- */
+  #detail-overlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 100;
+  }
+  #detail-overlay.open { display: block; }
+  #detail-panel {
+    position: fixed;
+    top: 0; right: -500px;
+    width: 500px; height: 100%;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    overflow-y: auto;
+    transition: right 0.25s ease;
+    z-index: 101;
+  }
+  #detail-panel.open { right: 0; }
+  .dp-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    gap: 12px;
+  }
+  .dp-test-id {
+    font-family: monospace;
+    font-size: 12px;
+    word-break: break-all;
+    flex: 1;
+  }
+  .dp-close {
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 20px;
+    line-height: 1;
+    padding: 0 4px;
+    flex-shrink: 0;
+  }
+  .dp-close:hover { color: var(--text); }
+  .dp-body { padding: 16px 20px; }
+  .dp-section { margin-bottom: 20px; }
+  .dp-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+  .dp-stats {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+  .dp-stat { text-align: center; }
+  .dp-stat-val { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .dp-stat-lbl { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .dp-timeline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .dp-dot {
+    width: 10px; height: 10px;
+    border-radius: 2px;
+    cursor: default;
+  }
+  .dp-dot.passed { background: var(--clean); }
+  .dp-dot.failed { background: var(--critical); }
+  .dp-dot.error  { background: var(--high); }
+  .dp-dot.skipped { background: var(--muted); }
+  .dp-dot.missing { background: var(--border); }
+  .dp-fix {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 13px;
+    padding: 10px 14px;
+    line-height: 1.6;
+  }
+  .dp-failure {
+    background: rgba(248,81,73,0.07);
+    border: 1px solid rgba(248,81,73,0.2);
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 11px;
+    max-height: 240px;
+    overflow-y: auto;
+    padding: 10px 14px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  #detail-loading { color: var(--muted); font-size: 13px; padding: 20px; }
 </style>
 </head>
 <body>
+<div id="detail-overlay" onclick="closeDetail()"></div>
+<div id="detail-panel">
+  <div class="dp-header">
+    <div class="dp-test-id" id="dp-test-id">—</div>
+    <button class="dp-close" onclick="closeDetail()">✕</button>
+  </div>
+  <div class="dp-body" id="dp-body"><div id="detail-loading">Loading…</div></div>
+</div>
 <header>
   <div class="hdr-left">
     <span class="hdr-title">FLAKY TEST AUTOPSY</span>
@@ -346,7 +454,7 @@ function renderTable(tests) {
     const raw        = t.test_id;
     const short      = esc(raw.length > 60 ? '…' + raw.slice(-59) : raw);
 
-    return `<tr>
+    return `<tr style="cursor:pointer" onclick="showDetail(${JSON.stringify(raw)})">
       <td class="td-test" title="${esc(raw)}">${short}</td>
       <td><span class="sev-pill sev-${esc(sev)}">${esc(sev)}</span></td>
       <td class="td-muted">${esc(cause)}</td>
@@ -359,6 +467,77 @@ function renderTable(tests) {
     </tr>`;
   }).join('');
 }
+
+async function showDetail(testId) {
+  document.getElementById('dp-test-id').textContent = testId;
+  document.getElementById('dp-body').innerHTML = '<div id="detail-loading">Loading…</div>';
+  document.getElementById('detail-overlay').classList.add('open');
+  document.getElementById('detail-panel').classList.add('open');
+
+  try {
+    const r = await fetch('/api/test?id=' + encodeURIComponent(testId));
+    const data = await r.json();
+    if (data.error) throw new Error(data.error);
+    renderDetail(data);
+  } catch (e) {
+    document.getElementById('dp-body').innerHTML =
+      '<div style="color:var(--critical);padding:12px">Failed to load: ' + esc(e.message) + '</div>';
+  }
+}
+
+function closeDetail() {
+  document.getElementById('detail-overlay').classList.remove('open');
+  document.getElementById('detail-panel').classList.remove('open');
+}
+
+function renderDetail(d) {
+  const sev = d.severity || 'none';
+  const flakeColor = v => v <= 0.05 ? '#3fb950' : v <= 0.20 ? '#58a6ff' : v <= 0.40 ? '#e3b341' : v <= 0.60 ? '#e06c4a' : '#f85149';
+  const fc = flakeColor(d.flakiness_score || 0);
+
+  const timeline = (d.history || []).map(h => {
+    const st = h.status || 'missing';
+    const tip = `Run ${h.run_index} · ${h.session_label || h.session_id || ''} · ${st} · ${(h.duration_s||0).toFixed(2)}s`;
+    return `<div class="dp-dot ${st}" title="${esc(tip)}"></div>`;
+  }).join('');
+
+  const fixHtml = d.template_fix
+    ? `<div class="dp-section"><div class="dp-label">Fix Suggestion</div><div class="dp-fix">${esc(d.template_fix)}</div></div>`
+    : '';
+
+  const failHtml = d.latest_failure
+    ? `<div class="dp-section"><div class="dp-label">Latest Failure</div><div class="dp-failure">${esc(d.latest_failure)}</div></div>`
+    : '';
+
+  document.getElementById('dp-body').innerHTML = `
+    <div class="dp-stats">
+      <div class="dp-stat">
+        <div class="dp-stat-val"><span class="sev-pill sev-${esc(sev)}">${esc(sev)}</span></div>
+        <div class="dp-stat-lbl">Severity</div>
+      </div>
+      <div class="dp-stat">
+        <div class="dp-stat-val" style="color:${fc}">${((d.flakiness_score||0)*100).toFixed(1)}%</div>
+        <div class="dp-stat-lbl">Flakiness</div>
+      </div>
+      <div class="dp-stat">
+        <div class="dp-stat-val">${((d.pass_rate||0)*100).toFixed(1)}%</div>
+        <div class="dp-stat-lbl">Pass Rate</div>
+      </div>
+      <div class="dp-stat">
+        <div class="dp-stat-val">${d.total_runs || 0}</div>
+        <div class="dp-stat-lbl">Runs</div>
+      </div>
+    </div>
+    <div class="dp-section">
+      <div class="dp-label">Run Timeline (green=pass, red=fail)</div>
+      <div class="dp-timeline">${timeline || '<span style="color:var(--muted);font-size:12px">No history</span>'}</div>
+    </div>
+    ${fixHtml}
+    ${failHtml}
+  `;
+}
+
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDetail(); });
 
 function applyFilter() { renderTable(allTests); }
 
@@ -608,6 +787,72 @@ def _build_api_data(db_path: str) -> dict[str, Any]:
     }
 
 
+# ── test detail builder ───────────────────────────────────────────────────────
+
+def _build_test_detail(db_path: str, test_id: str) -> dict[str, Any]:
+    """Return detail payload for a single test: history, fix suggestion, latest failure."""
+    from autopsy.db import get_history_for_test, get_results_for_test, open_db
+    from autopsy.fixer import get_fix_suggestion
+    from autopsy.scorer import score_from_conn
+
+    path = Path(db_path)
+    if not path.exists():
+        return {"error": "database not found"}
+
+    conn = open_db(path)
+    try:
+        history = get_history_for_test(conn, test_id)
+        reports = score_from_conn(conn, min_runs=1, flaky_threshold=0.05)
+    finally:
+        conn.close()
+
+    report = next((r for r in reports if r.test_id == test_id), None)
+    if report is None:
+        return {"error": "test not found"}
+
+    # Latest failure output
+    latest_failure: str | None = None
+    for row in reversed(history):
+        if row["status"] in ("failed", "error") and row.get("stdout"):
+            latest_failure = row["stdout"][:2000]
+            break
+
+    # Template fix suggestion (no AI, no cache needed for dashboard)
+    template_fix: str | None = None
+    try:
+        conn2 = open_db(path)
+        failure_outputs = [
+            row["stdout"] or "" for row in get_results_for_test(conn2, test_id)
+            if row["status"] in ("failed", "error")
+        ]
+        suggestion = get_fix_suggestion(report, failure_outputs, conn=conn2, use_ai=False, use_cache=False)
+        template_fix = suggestion.template_fix
+        conn2.close()
+    except Exception:  # noqa: BLE001
+        pass
+
+    return {
+        "test_id": test_id,
+        "severity": report.severity,
+        "flakiness_score": round(report.flakiness_score, 4),
+        "pass_rate": round(report.pass_rate, 4),
+        "total_runs": report.total_runs,
+        "root_cause": report.root_cause.category if report.root_cause else "unknown",
+        "history": [
+            {
+                "run_index": row["run_index"],
+                "session_id": row.get("session_id"),
+                "session_label": row.get("session_label"),
+                "status": row["status"],
+                "duration_s": row.get("duration_s", 0.0),
+            }
+            for row in history
+        ],
+        "latest_failure": latest_failure,
+        "template_fix": template_fix,
+    }
+
+
 # ── HTTP handler ───────────────────────────────────────────────────────────────
 
 def _make_handler(db_path: str) -> type[BaseHTTPRequestHandler]:
@@ -623,8 +868,11 @@ def _make_handler(db_path: str) -> type[BaseHTTPRequestHandler]:
             self.send_header("Referrer-Policy", "no-referrer")
 
         def do_GET(self) -> None:
-            """Handle GET requests for / and /api/data."""
-            if self.path == "/" or self.path == "":
+            """Handle GET requests for / and /api/data and /api/test."""
+            from urllib.parse import parse_qs, urlparse
+            parsed = urlparse(self.path)
+
+            if parsed.path in ("/", ""):
                 safe_db_path = _html_lib.escape(db_path, quote=True)
                 html = _HTML.replace(
                     '<meta charset="UTF-8"/>',
@@ -638,11 +886,40 @@ def _make_handler(db_path: str) -> type[BaseHTTPRequestHandler]:
                 self.end_headers()
                 self.wfile.write(body)
 
-            elif self.path == "/api/data":
+            elif parsed.path == "/api/data":
                 try:
                     data = _build_api_data(db_path)
                     body = json.dumps(data, default=str).encode("utf-8")
                     self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self._send_security_headers()
+                    self.end_headers()
+                    self.wfile.write(body)
+                except Exception:
+                    error = json.dumps({"error": "internal error"}).encode("utf-8")
+                    self.send_response(500)
+                    self.send_header("Content-Type", "application/json")
+                    self._send_security_headers()
+                    self.end_headers()
+                    self.wfile.write(error)
+
+            elif parsed.path == "/api/test":
+                qs = parse_qs(parsed.query)
+                ids = qs.get("id", [])
+                if not ids:
+                    error = json.dumps({"error": "missing id parameter"}).encode("utf-8")
+                    self.send_response(400)
+                    self.send_header("Content-Type", "application/json")
+                    self._send_security_headers()
+                    self.end_headers()
+                    self.wfile.write(error)
+                    return
+                try:
+                    data = _build_test_detail(db_path, ids[0])
+                    status = 404 if "error" in data else 200
+                    body = json.dumps(data, default=str).encode("utf-8")
+                    self.send_response(status)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(body)))
                     self._send_security_headers()
